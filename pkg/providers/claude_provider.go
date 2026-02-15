@@ -43,15 +43,26 @@ func NewClaudeProviderOAuth(tokenSource func() (string, error)) *ClaudeProvider 
 
 // oauthBearerMiddleware returns SDK middleware that replaces the default
 // x-api-key auth with Authorization: Bearer for OAuth tokens.
+// Mirrors the auth approach used by Claude CLI / OpenCode:
+// - Remove x-api-key header
+// - Set Authorization: Bearer <token>
+// - Set CLI user-agent (required for OAuth endpoint recognition)
+// - Add ?beta=true query param (enables OAuth on the API)
 func oauthBearerMiddleware(tokenSource func() (string, error)) option.Middleware {
 	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 		token, err := tokenSource()
 		if err != nil {
 			return nil, fmt.Errorf("refreshing OAuth token: %w", err)
 		}
+		// Strip API key auth — OAuth uses Bearer header instead
 		req.Header.Del("X-Api-Key")
+		req.Header.Del("x-api-key")
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("User-Agent", "claude-cli/2.1.2 (external, cli)")
+		// Beta flag required for OAuth-authenticated requests
+		q := req.URL.Query()
+		q.Set("beta", "true")
+		req.URL.RawQuery = q.Encode()
 		return next(req)
 	}
 }
