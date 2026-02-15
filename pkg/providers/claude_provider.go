@@ -59,7 +59,8 @@ func oauthBearerMiddleware(tokenSource func() (string, error)) option.Middleware
 		req.Header.Del("x-api-key")
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("User-Agent", "claude-cli/2.1.2 (external, cli)")
-		// Beta flag required for OAuth-authenticated requests
+		// Beta flags required for OAuth-authenticated requests
+		req.Header.Set("anthropic-beta", "oauth-2025-04-20,interleaved-thinking-2025-05-14")
 		q := req.URL.Query()
 		q.Set("beta", "true")
 		req.URL.RawQuery = q.Encode()
