@@ -127,7 +127,18 @@ func buildClaudeParams(messages []Message, tools []ToolDefinition, model string,
 					if name == "" {
 						continue
 					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, name))
+					// Resolve arguments: prefer map, fall back to parsing Function.Arguments string
+					args := tc.Arguments
+					if len(args) == 0 && tc.Function != nil && tc.Function.Arguments != "" {
+						var parsed map[string]interface{}
+						if json.Unmarshal([]byte(tc.Function.Arguments), &parsed) == nil {
+							args = parsed
+						}
+					}
+					if args == nil {
+						args = map[string]interface{}{}
+					}
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
