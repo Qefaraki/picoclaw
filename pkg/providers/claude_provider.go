@@ -120,7 +120,14 @@ func buildClaudeParams(messages []Message, tools []ToolDefinition, model string,
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
+					name := tc.Name
+					if name == "" && tc.Function != nil {
+						name = tc.Function.Name
+					}
+					if name == "" {
+						continue
+					}
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
