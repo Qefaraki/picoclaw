@@ -34,6 +34,8 @@ services:
     volumes:
       # Persistent workspace (sessions, memory, logs)
       - picoclaw-workspace:/root/.picoclaw/workspace
+      # Auth credentials (OAuth tokens — not in git)
+      - ./auth.json:/root/.picoclaw/auth.json:ro
     command: ["gateway"]
 
 volumes:
