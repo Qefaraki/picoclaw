@@ -2,7 +2,7 @@
   "agents": {
     "defaults": {
       "workspace": "~/.picoclaw/workspace",
-      "restrict_to_workspace": true,
+      "restrict_to_workspace": false,
       "provider": "anthropic",
       "model": "claude-opus-4-6",
       "max_tokens": 8192,
