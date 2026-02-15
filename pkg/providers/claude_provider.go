@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -27,6 +28,32 @@ func NewClaudeProviderWithTokenSource(token string, tokenSource func() (string, 
 	p := NewClaudeProvider(token)
 	p.tokenSource = tokenSource
 	return p
+}
+
+// NewClaudeProviderOAuth creates a provider that authenticates via OAuth Bearer
+// token instead of x-api-key. Claude Max/Pro subscriptions use OAuth tokens
+// which must be sent as Authorization: Bearer (not x-api-key).
+func NewClaudeProviderOAuth(tokenSource func() (string, error)) *ClaudeProvider {
+	client := anthropic.NewClient(
+		option.WithBaseURL("https://api.anthropic.com"),
+		option.WithMiddleware(oauthBearerMiddleware(tokenSource)),
+	)
+	return &ClaudeProvider{client: &client}
+}
+
+// oauthBearerMiddleware returns SDK middleware that replaces the default
+// x-api-key auth with Authorization: Bearer for OAuth tokens.
+func oauthBearerMiddleware(tokenSource func() (string, error)) option.Middleware {
+	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		token, err := tokenSource()
+		if err != nil {
+			return nil, fmt.Errorf("refreshing OAuth token: %w", err)
+		}
+		req.Header.Del("X-Api-Key")
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("User-Agent", "claude-cli/2.1.2 (external, cli)")
+		return next(req)
+	}
 }
 
 func (p *ClaudeProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}) (*LLMResponse, error) {

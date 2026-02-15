@@ -205,7 +205,9 @@ func createClaudeAuthProvider() (LLMProvider, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("no credentials for anthropic. Run: picoclaw auth login --provider anthropic")
 	}
-	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
+	// Use OAuth Bearer auth — Claude Max/Pro tokens must be sent via
+	// Authorization: Bearer header, not x-api-key.
+	return NewClaudeProviderOAuth(createClaudeTokenSource()), nil
 }
 
 func createCodexAuthProvider() (LLMProvider, error) {
