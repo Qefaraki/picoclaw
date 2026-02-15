@@ -25,8 +25,9 @@ RUN apk add --no-cache ca-certificates tzdata curl
 # Copy binary
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
 
-# Create picoclaw home directory
+# Create picoclaw home directory and bake in config
 RUN /usr/local/bin/picoclaw onboard
+COPY config/config.json /root/.picoclaw/config.json
 
 ENTRYPOINT ["picoclaw"]
 CMD ["gateway"]
