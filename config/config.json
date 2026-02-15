@@ -108,6 +108,10 @@
     "moonshot": {
       "api_key": "",
       "api_base": ""
+    },
+    "minimax": {
+      "api_key": "",
+      "api_base": "https://api.minimax.io/v1"
     }
   },
   "tools": {

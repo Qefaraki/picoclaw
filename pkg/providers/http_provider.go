@@ -325,6 +325,14 @@ func CreateProvider(cfg *config.Config) (LLMProvider, error) {
 			}
 			return NewGitHubCopilotProvider(apiBase, cfg.Providers.GitHubCopilot.ConnectMode, model)
 
+		case "minimax":
+			if cfg.Providers.MiniMax.APIKey != "" {
+				apiKey = cfg.Providers.MiniMax.APIKey
+				apiBase = cfg.Providers.MiniMax.APIBase
+				if apiBase == "" {
+					apiBase = "https://api.minimax.io/v1"
+				}
+			}
 		}
 
 	}
@@ -401,6 +409,14 @@ func CreateProvider(cfg *config.Config) (LLMProvider, error) {
 			proxy = cfg.Providers.Nvidia.Proxy
 			if apiBase == "" {
 				apiBase = "https://integrate.api.nvidia.com/v1"
+			}
+
+		case (strings.Contains(lowerModel, "minimax") || strings.HasPrefix(model, "minimax/")) && cfg.Providers.MiniMax.APIKey != "":
+			apiKey = cfg.Providers.MiniMax.APIKey
+			apiBase = cfg.Providers.MiniMax.APIBase
+			proxy = cfg.Providers.MiniMax.Proxy
+			if apiBase == "" {
+				apiBase = "https://api.minimax.io/v1"
 			}
 
 		case cfg.Providers.VLLM.APIBase != "":
