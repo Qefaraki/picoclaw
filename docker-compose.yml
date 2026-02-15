@@ -29,9 +29,9 @@ services:
     restart: unless-stopped
     profiles:
       - gateway
+    env_file:
+      - .env
     volumes:
-      # Configuration file
-      - ./config/config.json:/root/.picoclaw/config.json:ro
       # Persistent workspace (sessions, memory, logs)
       - picoclaw-workspace:/root/.picoclaw/workspace
     command: ["gateway"]
