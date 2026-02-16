@@ -115,6 +115,15 @@
         "api_key": "YOUR_BRAVE_API_KEY",
         "max_results": 5
       }
+    },
+    "email": {
+      "enabled": false,
+      "address": ""
+    },
+    "memory": {
+      "semantic_search": true,
+      "knowledge_extract": true,
+      "embedding_model": "text-embedding-3-small"
     }
   },
   "heartbeat": {

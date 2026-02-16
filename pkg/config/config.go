@@ -221,9 +221,22 @@ type MoodleConfig struct {
 	M365Password string `json:"m365_password" env:"PICOCLAW_TOOLS_MOODLE_M365_PASSWORD"`
 }
 
+type EmailConfig struct {
+	Enabled bool   `json:"enabled" env:"PICOCLAW_TOOLS_EMAIL_ENABLED"`
+	Address string `json:"address" env:"PICOCLAW_TOOLS_EMAIL_ADDRESS"`
+}
+
+type MemoryConfig struct {
+	SemanticSearch   bool   `json:"semantic_search" env:"PICOCLAW_MEMORY_SEMANTIC_SEARCH"`
+	KnowledgeExtract bool   `json:"knowledge_extract" env:"PICOCLAW_MEMORY_KNOWLEDGE_EXTRACT"`
+	EmbeddingModel   string `json:"embedding_model" env:"PICOCLAW_MEMORY_EMBEDDING_MODEL"`
+}
+
 type ToolsConfig struct {
 	Web    WebToolsConfig `json:"web"`
 	Moodle MoodleConfig   `json:"moodle"`
+	Email  EmailConfig    `json:"email"`
+	Memory MemoryConfig   `json:"memory"`
 }
 
 func DefaultConfig() *Config {
@@ -337,6 +350,15 @@ func DefaultConfig() *Config {
 				Enabled: false,
 				URL:     "",
 				Token:   "",
+			},
+			Email: EmailConfig{
+				Enabled: false,
+				Address: "",
+			},
+			Memory: MemoryConfig{
+				SemanticSearch:   true,
+				KnowledgeExtract: true,
+				EmbeddingModel:   "text-embedding-3-small",
 			},
 		},
 		Heartbeat: HeartbeatConfig{

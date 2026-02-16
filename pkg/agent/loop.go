@@ -119,6 +119,13 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 		}))
 	}
 
+	// Email (M365 Outlook) tool
+	if cfg.Tools.Email.Enabled {
+		registry.Register(tools.NewEmailTool(tools.EmailToolOptions{
+			EmailAddress: cfg.Tools.Email.Address,
+		}))
+	}
+
 	// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 	registry.Register(tools.NewI2CTool())
 	registry.Register(tools.NewSPITool())
