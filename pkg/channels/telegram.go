@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -248,7 +249,11 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		if photoPath != "" {
 			localFiles = append(localFiles, photoPath)
 			part, err := media.ProcessFile(photoPath)
-			if err == nil && part != nil {
+			if err != nil {
+				logger.ErrorCF("telegram", "Failed to process media file", map[string]interface{}{
+					"path": photoPath, "error": err.Error(),
+				})
+			} else if part != nil {
 				mediaParts = append(mediaParts, *part)
 			}
 			if content != "" {
@@ -308,7 +313,11 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		if docPath != "" {
 			localFiles = append(localFiles, docPath)
 			part, err := media.ProcessFile(docPath)
-			if err == nil && part != nil {
+			if err != nil {
+				logger.ErrorCF("telegram", "Failed to process media file", map[string]interface{}{
+					"path": docPath, "error": err.Error(),
+				})
+			} else if part != nil {
 				mediaParts = append(mediaParts, *part)
 			}
 			if content != "" {
@@ -353,7 +362,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 	}
 
 	// Create cancel function for thinking state
-	_, thinkCancel := context.WithTimeout(ctx, 5*time.Minute)
+	_, thinkCancel := context.WithCancel(ctx)
 	c.stopThinking.Store(chatIDStr, &thinkingCancel{fn: thinkCancel})
 
 	pMsg, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(chatID), "Thinking... 💭"))
@@ -394,7 +403,11 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 	logger.DebugCF("telegram", "File URL", map[string]interface{}{"url": url})
 
 	// Use FilePath as filename for better identification
-	filename := file.FilePath + ext
+	// Only append ext if FilePath doesn't already have one
+	filename := file.FilePath
+	if ext != "" && filepath.Ext(filename) == "" {
+		filename += ext
+	}
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "telegram",
 	})

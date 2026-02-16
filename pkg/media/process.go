@@ -4,14 +4,15 @@ import (
 	"encoding/base64"
 	"fmt"
 	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 const (
-	maxImageSize = 20 * 1024 * 1024  // 20MB
-	maxTextSize  = 100 * 1024        // 100KB
+	maxImageSize = 15 * 1024 * 1024 // 15MB raw (base64 adds ~33% → ~20MB encoded)
+	maxTextSize  = 100 * 1024       // 100KB
 )
 
 // imageExts maps file extensions to MIME types for supported image formats.
@@ -49,6 +50,14 @@ func ProcessFile(path string) (*ContentPart, error) {
 
 	ext := strings.ToLower(filepath.Ext(path))
 	fileName := filepath.Base(path)
+
+	// Empty file guard
+	if info.Size() == 0 {
+		return &ContentPart{
+			Type: "text",
+			Text: fmt.Sprintf("[Empty file: %s]", fileName),
+		}, nil
+	}
 
 	// Image files
 	if mimeType, ok := imageExts[ext]; ok {
@@ -89,6 +98,25 @@ func ProcessFile(path string) (*ContentPart, error) {
 		}, nil
 	}
 
+	// No recognized extension — sniff content type from first 512 bytes
+	if isLikelyText(path) {
+		if info.Size() > maxTextSize {
+			return &ContentPart{
+				Type: "text",
+				Text: fmt.Sprintf("[File too large to include: %s, %.1f KB]", fileName, float64(info.Size())/1024),
+			}, nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read text %s: %w", path, err)
+		}
+		return &ContentPart{
+			Type:     "text",
+			Text:     fmt.Sprintf("--- Content of %s ---\n%s\n--- End of %s ---", fileName, string(data), fileName),
+			FileName: fileName,
+		}, nil
+	}
+
 	// Unsupported / binary
 	return &ContentPart{
 		Type: "text",
@@ -99,4 +127,21 @@ func ProcessFile(path string) (*ContentPart, error) {
 func isTextMIME(ext string) bool {
 	mimeType := mime.TypeByExtension(ext)
 	return strings.HasPrefix(mimeType, "text/")
+}
+
+// isLikelyText reads the first 512 bytes and uses http.DetectContentType
+// to determine if a file is likely text (for files with no recognized extension).
+func isLikelyText(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	if n == 0 {
+		return false
+	}
+	ct := http.DetectContentType(buf[:n])
+	return strings.HasPrefix(ct, "text/") || ct == "application/json"
 }

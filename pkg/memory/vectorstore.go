@@ -15,13 +15,27 @@ import (
 
 // MemoryResult represents a single search result from the vector store.
 type MemoryResult struct {
-	ID        string  `json:"id"`
-	Content   string  `json:"content"`
-	Score     float32 `json:"score"`
-	Timestamp string  `json:"timestamp"` // RFC3339
-	Category  string  `json:"category,omitempty"`
-	Source    string  `json:"source"` // "conversations" or "knowledge"
-	Channel   string  `json:"channel,omitempty"`
+	ID           string  `json:"id"`
+	Content      string  `json:"content"`
+	Score        float32 `json:"score"`
+	Timestamp    string  `json:"timestamp"` // RFC3339
+	Category     string  `json:"category,omitempty"`
+	Source       string  `json:"source"` // "conversations" or "knowledge"
+	Channel      string  `json:"channel,omitempty"`
+	Specialist   string  `json:"specialist,omitempty"`
+	SourceType   string  `json:"source_type,omitempty"`
+	SourceName   string  `json:"source_name,omitempty"`
+	SourceDate   string  `json:"source_date,omitempty"`
+	SourcePerson string  `json:"source_person,omitempty"`
+}
+
+// KnowledgeIndexOpts holds optional metadata for specialist-scoped knowledge.
+type KnowledgeIndexOpts struct {
+	Specialist   string // scoping: "summer-camp", "" for global
+	SourceType   string // "whatsapp_chat", "pdf", "email", "contract", "conversation", "manual"
+	SourceName   string // "Charlie's WhatsApp", "Partnership Agreement.pdf"
+	SourceDate   string // "2025-11-06T18:00:00Z" — when the source event happened
+	SourcePerson string // "Charlie", "Sarah" — who said/wrote it
 }
 
 // VectorStore wraps chromem-go with two collections: conversations and knowledge.
@@ -136,6 +150,51 @@ func (vs *VectorStore) IndexKnowledge(ctx context.Context, docID, fact, category
 	return nil
 }
 
+// IndexKnowledgeWithOpts adds a fact with specialist scoping and source attribution.
+func (vs *VectorStore) IndexKnowledgeWithOpts(ctx context.Context, docID, fact, category string, opts KnowledgeIndexOpts) error {
+	if docID == "" {
+		docID = fmt.Sprintf("k:%d", time.Now().UnixNano())
+	}
+
+	metadata := map[string]string{
+		"category":   category,
+		"updated_at": time.Now().Format(time.RFC3339),
+	}
+	if opts.Specialist != "" {
+		metadata["specialist"] = opts.Specialist
+	}
+	if opts.SourceType != "" {
+		metadata["source_type"] = opts.SourceType
+	}
+	if opts.SourceName != "" {
+		metadata["source_name"] = opts.SourceName
+	}
+	if opts.SourceDate != "" {
+		metadata["source_date"] = opts.SourceDate
+	}
+	if opts.SourcePerson != "" {
+		metadata["source_person"] = opts.SourcePerson
+	}
+
+	doc := chromem.Document{
+		ID:       docID,
+		Content:  fact,
+		Metadata: metadata,
+	}
+
+	if err := vs.knowledge.AddDocument(ctx, doc); err != nil {
+		return fmt.Errorf("index knowledge: %w", err)
+	}
+
+	logger.DebugCF("memory", "Indexed knowledge", map[string]interface{}{
+		"doc_id":     docID,
+		"category":   category,
+		"specialist": opts.Specialist,
+		"fact_len":   len(fact),
+	})
+	return nil
+}
+
 // DeleteKnowledge removes a fact from the knowledge collection.
 func (vs *VectorStore) DeleteKnowledge(ctx context.Context, docID string) error {
 	if err := vs.knowledge.Delete(ctx, nil, nil, docID); err != nil {
@@ -173,8 +232,14 @@ func (vs *VectorStore) SearchConversations(ctx context.Context, query string, li
 	return out, nil
 }
 
-// SearchKnowledge searches the extracted knowledge base.
+// SearchKnowledge searches the extracted knowledge base (global, unscoped).
 func (vs *VectorStore) SearchKnowledge(ctx context.Context, query string, limit int) ([]MemoryResult, error) {
+	return vs.SearchKnowledgeScoped(ctx, query, limit, "")
+}
+
+// SearchKnowledgeScoped searches knowledge filtered by specialist.
+// If specialist is empty, returns all knowledge (global search).
+func (vs *VectorStore) SearchKnowledgeScoped(ctx context.Context, query string, limit int, specialist string) ([]MemoryResult, error) {
 	if vs.knowledge.Count() == 0 {
 		return nil, nil
 	}
@@ -183,7 +248,12 @@ func (vs *VectorStore) SearchKnowledge(ctx context.Context, query string, limit 
 		limit = vs.knowledge.Count()
 	}
 
-	results, err := vs.knowledge.Query(ctx, query, limit, nil, nil)
+	var where map[string]string
+	if specialist != "" {
+		where = map[string]string{"specialist": specialist}
+	}
+
+	results, err := vs.knowledge.Query(ctx, query, limit, where, nil)
 	if err != nil {
 		return nil, fmt.Errorf("search knowledge: %w", err)
 	}
@@ -191,12 +261,17 @@ func (vs *VectorStore) SearchKnowledge(ctx context.Context, query string, limit 
 	var out []MemoryResult
 	for _, r := range results {
 		out = append(out, MemoryResult{
-			ID:        r.ID,
-			Content:   r.Content,
-			Score:     r.Similarity,
-			Timestamp: r.Metadata["updated_at"],
-			Category:  r.Metadata["category"],
-			Source:    "knowledge",
+			ID:           r.ID,
+			Content:      r.Content,
+			Score:        r.Similarity,
+			Timestamp:    r.Metadata["updated_at"],
+			Category:     r.Metadata["category"],
+			Source:       "knowledge",
+			Specialist:   r.Metadata["specialist"],
+			SourceType:   r.Metadata["source_type"],
+			SourceName:   r.Metadata["source_name"],
+			SourceDate:   r.Metadata["source_date"],
+			SourcePerson: r.Metadata["source_person"],
 		})
 	}
 	return out, nil
@@ -267,12 +342,12 @@ func FormatResults(results []MemoryResult) string {
 	if len(knowledgeResults) > 0 {
 		sb.WriteString("## Knowledge\n")
 		for _, r := range knowledgeResults {
-			date := formatDate(r.Timestamp)
+			prefix := formatProvenance(r)
 			cat := ""
 			if r.Category != "" {
 				cat = fmt.Sprintf(" (%s)", r.Category)
 			}
-			sb.WriteString(fmt.Sprintf("- [%s] %s%s\n", date, r.Content, cat))
+			sb.WriteString(fmt.Sprintf("- %s %s%s\n", prefix, r.Content, cat))
 		}
 	}
 
@@ -298,6 +373,32 @@ func FormatResults(results []MemoryResult) string {
 	}
 
 	return sb.String()
+}
+
+// formatProvenance builds a bracketed source attribution prefix for a knowledge result.
+// Examples: "[2025-11-06, Charlie via WhatsApp]", "[2025-11-06]", "[unknown]"
+func formatProvenance(r MemoryResult) string {
+	var parts []string
+
+	// Date: prefer source_date, fall back to updated_at
+	date := r.SourceDate
+	if date == "" {
+		date = r.Timestamp
+	}
+	parts = append(parts, formatDate(date))
+
+	// Person + source type
+	if r.SourcePerson != "" && r.SourceType != "" {
+		parts = append(parts, fmt.Sprintf("%s via %s", r.SourcePerson, r.SourceType))
+	} else if r.SourcePerson != "" {
+		parts = append(parts, r.SourcePerson)
+	} else if r.SourceName != "" {
+		parts = append(parts, r.SourceName)
+	} else if r.SourceType != "" {
+		parts = append(parts, r.SourceType)
+	}
+
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func formatDate(ts string) string {

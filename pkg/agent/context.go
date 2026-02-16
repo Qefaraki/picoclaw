@@ -12,14 +12,16 @@ import (
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
+	"github.com/sipeed/picoclaw/pkg/specialists"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 type ContextBuilder struct {
-	workspace    string
-	skillsLoader *skills.SkillsLoader
-	memory       *MemoryStore
-	tools        *tools.ToolRegistry // Direct reference to tool registry
+	workspace         string
+	skillsLoader      *skills.SkillsLoader
+	specialistLoader  *specialists.SpecialistLoader
+	memory            *MemoryStore
+	tools             *tools.ToolRegistry // Direct reference to tool registry
 }
 
 func getGlobalConfigDir() string {
@@ -47,6 +49,11 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 // SetToolsRegistry sets the tools registry for dynamic tool summary generation.
 func (cb *ContextBuilder) SetToolsRegistry(registry *tools.ToolRegistry) {
 	cb.tools = registry
+}
+
+// SetSpecialistLoader sets the specialist loader for system prompt generation.
+func (cb *ContextBuilder) SetSpecialistLoader(loader *specialists.SpecialistLoader) {
+	cb.specialistLoader = loader
 }
 
 func (cb *ContextBuilder) getIdentity() string {
@@ -134,6 +141,18 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
 
 %s`, skillsSummary))
+	}
+
+	// Specialists summary
+	if cb.specialistLoader != nil {
+		specialistsSummary := cb.specialistLoader.BuildSpecialistsSummary()
+		if specialistsSummary != "" {
+			parts = append(parts, fmt.Sprintf(`# Specialists
+
+The following domain specialists are available. Use the consult_specialist tool to delegate domain-specific questions to them. Each specialist has its own persona and scoped memory.
+
+%s`, specialistsSummary))
+		}
 	}
 
 	// Memory context

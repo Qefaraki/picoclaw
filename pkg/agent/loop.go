@@ -28,6 +28,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/specialists"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
@@ -212,6 +213,22 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	subagentTool := tools.NewSubagentTool(subagentManager)
 	toolsRegistry.Register(subagentTool)
 
+	// Register specialist tools
+	specialistLoader := specialists.NewSpecialistLoader(workspace)
+	consultTool := tools.NewConsultSpecialistTool(tools.ConsultSpecialistConfig{
+		Loader:      specialistLoader,
+		Provider:    provider,
+		Model:       cfg.Agents.Defaults.Model,
+		Tools:       subagentTools,
+		VectorStore: vectorStore,
+		Extractor:   extractor,
+		MaxIter:     cfg.Agents.Defaults.MaxToolIterations,
+		Workspace:   workspace,
+	})
+	toolsRegistry.Register(consultTool)
+	toolsRegistry.Register(tools.NewCreateSpecialistTool(specialistLoader, provider, cfg.Agents.Defaults.Model, workspace, extractor, vectorStore))
+	toolsRegistry.Register(tools.NewFeedSpecialistTool(specialistLoader, vectorStore, extractor))
+
 	sessionsManager := session.NewSessionManager(filepath.Join(workspace, "sessions"))
 
 	// Create state manager for atomic state persistence
@@ -220,6 +237,7 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	// Create context builder and set tools registry
 	contextBuilder := NewContextBuilder(workspace)
 	contextBuilder.SetToolsRegistry(toolsRegistry)
+	contextBuilder.SetSpecialistLoader(specialistLoader)
 
 	return &AgentLoop{
 		bus:            msgBus,
@@ -307,7 +325,7 @@ func (al *AgentLoop) routeMessages(ctx context.Context) {
 		active := al.activeSession
 		al.pendingMu.Unlock()
 
-		if active != "" && msg.SessionKey == active {
+		if active != "" && msg.SessionKey == active && msg.Channel != "system" {
 			// This message targets the session currently being processed — inject it
 			logger.InfoCF("agent", "Routing message to interrupt channel",
 				map[string]interface{}{
@@ -317,11 +335,27 @@ func (al *AgentLoop) routeMessages(ctx context.Context) {
 			select {
 			case al.interruptCh <- msg:
 			default:
-				// Buffer full — fall through to pending
-				al.pendingMsgs <- msg
+				// Interrupt buffer full — try pending queue (non-blocking)
+				select {
+				case al.pendingMsgs <- msg:
+				default:
+					logger.ErrorCF("agent", "Both interrupt and pending channels full, dropping message",
+						map[string]interface{}{
+							"session_key": msg.SessionKey,
+							"preview":     utils.Truncate(msg.Content, 60),
+						})
+				}
 			}
 		} else {
-			al.pendingMsgs <- msg
+			select {
+			case al.pendingMsgs <- msg:
+			default:
+				logger.ErrorCF("agent", "Pending channel full, dropping message",
+					map[string]interface{}{
+						"session_key": msg.SessionKey,
+						"preview":     utils.Truncate(msg.Content, 60),
+					})
+			}
 		}
 	}
 }
@@ -564,7 +598,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 	if al.vectorStore != nil && !opts.NoHistory {
 		go al.vectorStore.IndexConversation(context.Background(), opts.SessionKey, opts.Channel, opts.ChatID, opts.UserMessage, finalContent)
 		if al.extractor != nil {
-			go al.extractor.ExtractAndConsolidate(context.Background(), opts.UserMessage, finalContent, opts.SessionKey)
+			go al.extractor.ExtractAndConsolidate(context.Background(), opts.UserMessage, finalContent, opts.SessionKey, "", memory.KnowledgeIndexOpts{})
 		}
 	}
 
@@ -685,12 +719,12 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			finalContent = response.Content
 
 			// Edge case: LLM gave a final answer, but a new user message arrived.
-			// Save the assistant answer, inject the new message, and continue the loop.
+			// Temporarily append assistant message to check for interrupts.
 			messages = append(messages, providers.Message{Role: "assistant", Content: finalContent})
-			al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
 			injected := al.drainInterrupts(messages, opts.SessionKey)
 			if len(injected) > len(messages) {
-				// New messages were injected — send current answer and continue
+				// New messages were injected — save and send current answer, then continue
+				al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
 				al.bus.PublishOutbound(bus.OutboundMessage{
 					Channel: opts.Channel,
 					ChatID:  opts.ChatID,
@@ -700,7 +734,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				finalContent = ""
 				continue
 			}
-			// No interrupts — remove the assistant message we just appended
+			// No interrupts — remove the temp assistant message
 			// (it will be saved by the caller in runAgentLoop step 6)
 			messages = messages[:len(messages)-1]
 
@@ -816,6 +850,19 @@ func (al *AgentLoop) drainInterrupts(messages []providers.Message, sessionKey st
 	for {
 		select {
 		case msg := <-al.interruptCh:
+			if msg.SessionKey != sessionKey {
+				// Wrong session — re-queue for normal processing
+				select {
+				case al.pendingMsgs <- msg:
+				default:
+					logger.ErrorCF("agent", "Pending channel full, dropping misrouted interrupt",
+						map[string]interface{}{
+							"target_session": msg.SessionKey,
+							"active_session": sessionKey,
+						})
+				}
+				continue
+			}
 			userMsg := providers.Message{
 				Role:    "user",
 				Content: msg.Content,
@@ -857,6 +904,11 @@ func (al *AgentLoop) updateToolContexts(channel, chatID string) {
 		}
 	}
 	if tool, ok := al.tools.Get("subagent"); ok {
+		if st, ok := tool.(tools.ContextualTool); ok {
+			st.SetContext(channel, chatID)
+		}
+	}
+	if tool, ok := al.tools.Get("consult_specialist"); ok {
 		if st, ok := tool.(tools.ContextualTool); ok {
 			st.SetContext(channel, chatID)
 		}
