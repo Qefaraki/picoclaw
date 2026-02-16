@@ -65,7 +65,14 @@ func (t *GroqTranscriber) Transcribe(ctx context.Context, audioFilePath string) 
 	var requestBody bytes.Buffer
 	writer := multipart.NewWriter(&requestBody)
 
-	part, err := writer.CreateFormFile("file", filepath.Base(audioFilePath))
+	// Normalize filename extension for Groq API compatibility.
+	// Telegram sends voice notes as .oga (Ogg audio), which Groq doesn't
+	// recognize — but it's the same container as .ogg, which Groq accepts.
+	fileName := filepath.Base(audioFilePath)
+	if ext := filepath.Ext(fileName); ext == ".oga" {
+		fileName = fileName[:len(fileName)-len(ext)] + ".ogg"
+	}
+	part, err := writer.CreateFormFile("file", fileName)
 	if err != nil {
 		logger.ErrorCF("voice", "Failed to create form file", map[string]interface{}{"error": err})
 		return nil, fmt.Errorf("failed to create form file: %w", err)
