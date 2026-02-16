@@ -21,6 +21,8 @@ Ultra-lightweight personal AI assistant written in Go, inspired by nanobot.
 - File system operations (read, write, edit)
 - Shell command execution
 - Multi-channel messaging (Telegram, WhatsApp, Feishu)
+- QM+ Moodle access (courses, assignments, calendar)
+- M365 Outlook email (read, search, archive)
 - Skill-based extensibility
 - Memory and context management
 
