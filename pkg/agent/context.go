@@ -64,9 +64,9 @@ func (cb *ContextBuilder) getIdentity() string {
 	// Build tools section dynamically
 	toolsSection := cb.buildToolsSection()
 
-	return fmt.Sprintf(`# picoclaw 🦞
+	return fmt.Sprintf(`# Saleh
 
-You are picoclaw, a helpful AI assistant.
+You are Saleh, a personal AI assistant.
 
 ## Current Time
 %s
