@@ -83,6 +83,11 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	}
 	registry.Register(tools.NewWebFetchTool(50000))
 
+	// Moodle (QM+) tool
+	if cfg.Tools.Moodle.Enabled && cfg.Tools.Moodle.Token != "" {
+		registry.Register(tools.NewMoodleTool(cfg.Tools.Moodle.URL, cfg.Tools.Moodle.Token))
+	}
+
 	// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 	registry.Register(tools.NewI2CTool())
 	registry.Register(tools.NewSPITool())

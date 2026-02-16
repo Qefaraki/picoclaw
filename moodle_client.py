@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Moodle Web Services client for QM+ (qmplus.qmul.ac.uk)."""
+from __future__ import annotations
 
 import getpass
 import json

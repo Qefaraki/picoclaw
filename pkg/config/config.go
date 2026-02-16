@@ -213,8 +213,15 @@ type WebToolsConfig struct {
 	DuckDuckGo DuckDuckGoConfig `json:"duckduckgo"`
 }
 
+type MoodleConfig struct {
+	Enabled bool   `json:"enabled" env:"PICOCLAW_TOOLS_MOODLE_ENABLED"`
+	URL     string `json:"url" env:"PICOCLAW_TOOLS_MOODLE_URL"`
+	Token   string `json:"token" env:"PICOCLAW_TOOLS_MOODLE_TOKEN"`
+}
+
 type ToolsConfig struct {
-	Web WebToolsConfig `json:"web"`
+	Web    WebToolsConfig `json:"web"`
+	Moodle MoodleConfig   `json:"moodle"`
 }
 
 func DefaultConfig() *Config {
@@ -323,6 +330,11 @@ func DefaultConfig() *Config {
 					Enabled:    true,
 					MaxResults: 5,
 				},
+			},
+			Moodle: MoodleConfig{
+				Enabled: false,
+				URL:     "",
+				Token:   "",
 			},
 		},
 		Heartbeat: HeartbeatConfig{
