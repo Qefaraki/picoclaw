@@ -186,7 +186,7 @@ func TestExchangeCodeForTokens(t *testing.T) {
 		Provider: "openai",
 	}
 
-	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "http://localhost:1455/auth/callback")
+	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "http://localhost:1455/auth/callback", "test-state")
 	if err != nil {
 		t.Fatalf("exchangeCodeForTokens() error: %v", err)
 	}
@@ -221,6 +221,10 @@ func TestExchangeCodeForTokensAnthropic(t *testing.T) {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
 			return
 		}
+		if body["state"] != "test-state" {
+			http.Error(w, "missing or invalid state", http.StatusBadRequest)
+			return
+		}
 
 		resp := map[string]interface{}{
 			"access_token":  "anthropic-access-token",
@@ -240,7 +244,7 @@ func TestExchangeCodeForTokensAnthropic(t *testing.T) {
 		Provider:      "anthropic",
 	}
 
-	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "https://console.anthropic.com/oauth/code/callback")
+	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "https://console.anthropic.com/oauth/code/callback", "test-state")
 	if err != nil {
 		t.Fatalf("exchangeCodeForTokens() error: %v", err)
 	}

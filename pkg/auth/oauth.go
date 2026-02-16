@@ -141,7 +141,7 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 		if result.err != nil {
 			return nil, result.err
 		}
-		return exchangeCodeForTokens(cfg, result.code, pkce.CodeVerifier, redirectURI)
+		return exchangeCodeForTokens(cfg, result.code, pkce.CodeVerifier, redirectURI, state)
 	case <-time.After(5 * time.Minute):
 		return nil, fmt.Errorf("authentication timed out after 5 minutes")
 	}
@@ -169,7 +169,7 @@ func loginBrowserAnthropic(cfg OAuthProviderConfig, pkce PKCECodes, state string
 		return nil, fmt.Errorf("empty authorization code")
 	}
 
-	return exchangeCodeForTokens(cfg, code, pkce.CodeVerifier, redirectURI)
+	return exchangeCodeForTokens(cfg, code, pkce.CodeVerifier, redirectURI, state)
 }
 
 type callbackResult struct {
@@ -312,7 +312,7 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 	}
 
 	redirectURI := cfg.Issuer + "/deviceauth/callback"
-	return exchangeCodeForTokens(cfg, tokenResp.AuthorizationCode, tokenResp.CodeVerifier, redirectURI)
+	return exchangeCodeForTokens(cfg, tokenResp.AuthorizationCode, tokenResp.CodeVerifier, redirectURI, "")
 }
 
 func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
@@ -381,18 +381,22 @@ func buildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectU
 	return base + "/oauth/authorize?" + params.Encode()
 }
 
-func exchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirectURI string) (*AuthCredential, error) {
+func exchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirectURI, state string) (*AuthCredential, error) {
 	var resp *http.Response
 	var err error
 
 	if cfg.Provider == "anthropic" {
-		jsonBody, _ := json.Marshal(map[string]string{
+		bodyMap := map[string]string{
 			"grant_type":    "authorization_code",
 			"code":          code,
 			"redirect_uri":  redirectURI,
 			"client_id":     cfg.ClientID,
 			"code_verifier": codeVerifier,
-		})
+		}
+		if state != "" {
+			bodyMap["state"] = state
+		}
+		jsonBody, _ := json.Marshal(bodyMap)
 		resp, err = http.Post(cfg.tokenEndpointURL(), "application/json", bytes.NewReader(jsonBody))
 	} else {
 		data := url.Values{
