@@ -777,11 +777,13 @@ func authHelp() {
 	fmt.Println("Login options:")
 	fmt.Println("  --provider <name>    Provider to login with (openai, anthropic)")
 	fmt.Println("  --device-code        Use device code flow (for headless environments)")
+	fmt.Println("  --token              Paste an API key instead of browser OAuth")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  picoclaw auth login --provider openai")
 	fmt.Println("  picoclaw auth login --provider openai --device-code")
 	fmt.Println("  picoclaw auth login --provider anthropic")
+	fmt.Println("  picoclaw auth login --provider anthropic --token")
 	fmt.Println("  picoclaw auth logout --provider openai")
 	fmt.Println("  picoclaw auth status")
 }
@@ -789,6 +791,7 @@ func authHelp() {
 func authLoginCmd() {
 	provider := ""
 	useDeviceCode := false
+	usePasteToken := false
 
 	args := os.Args[3:]
 	for i := 0; i < len(args); i++ {
@@ -800,6 +803,8 @@ func authLoginCmd() {
 			}
 		case "--device-code":
 			useDeviceCode = true
+		case "--token", "--paste-token":
+			usePasteToken = true
 		}
 	}
 
@@ -813,7 +818,7 @@ func authLoginCmd() {
 	case "openai":
 		authLoginOpenAI(useDeviceCode)
 	case "anthropic":
-		authLoginPasteToken(provider)
+		authLoginAnthropic(usePasteToken)
 	default:
 		fmt.Printf("Unsupported provider: %s\n", provider)
 		fmt.Println("Supported providers: openai, anthropic")
@@ -854,6 +859,35 @@ func authLoginOpenAI(useDeviceCode bool) {
 	if cred.AccountID != "" {
 		fmt.Printf("Account: %s\n", cred.AccountID)
 	}
+}
+
+func authLoginAnthropic(usePasteToken bool) {
+	if usePasteToken {
+		authLoginPasteToken("anthropic")
+		return
+	}
+
+	cfg := auth.AnthropicOAuthConfig()
+	cred, err := auth.LoginBrowser(cfg)
+	if err != nil {
+		fmt.Printf("Login failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := auth.SetCredential("anthropic", cred); err != nil {
+		fmt.Printf("Failed to save credentials: %v\n", err)
+		os.Exit(1)
+	}
+
+	appCfg, err := loadConfig()
+	if err == nil {
+		appCfg.Providers.Anthropic.AuthMethod = "oauth"
+		if err := config.SaveConfig(getConfigPath(), appCfg); err != nil {
+			fmt.Printf("Warning: could not update config: %v\n", err)
+		}
+	}
+
+	fmt.Println("Login successful!")
 }
 
 func authLoginPasteToken(provider string) {

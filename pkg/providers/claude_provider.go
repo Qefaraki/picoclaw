@@ -259,6 +259,19 @@ func createClaudeTokenSource() func() (string, error) {
 		if cred == nil {
 			return "", fmt.Errorf("no credentials for anthropic. Run: picoclaw auth login --provider anthropic")
 		}
+
+		if cred.AuthMethod == "oauth" && cred.NeedsRefresh() && cred.RefreshToken != "" {
+			oauthCfg := auth.AnthropicOAuthConfig()
+			refreshed, err := auth.RefreshAccessToken(cred, oauthCfg)
+			if err != nil {
+				return "", fmt.Errorf("refreshing token: %w", err)
+			}
+			if err := auth.SetCredential("anthropic", refreshed); err != nil {
+				return "", fmt.Errorf("saving refreshed token: %w", err)
+			}
+			return refreshed.AccessToken, nil
+		}
+
 		return cred.AccessToken, nil
 	}
 }

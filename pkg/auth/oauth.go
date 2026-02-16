@@ -19,11 +19,21 @@ import (
 )
 
 type OAuthProviderConfig struct {
-	Issuer     string
-	ClientID   string
-	Scopes     string
-	Originator string
-	Port       int
+	Issuer        string
+	ClientID      string
+	Scopes        string
+	Originator    string
+	Port          int
+	TokenEndpoint string // e.g. "/v1/oauth/token"; defaults to "/oauth/token"
+	Provider      string // "openai" or "anthropic"
+}
+
+// tokenEndpointURL returns the full URL for the token endpoint.
+func (cfg OAuthProviderConfig) tokenEndpointURL() string {
+	if cfg.TokenEndpoint != "" {
+		return cfg.Issuer + cfg.TokenEndpoint
+	}
+	return cfg.Issuer + "/oauth/token"
 }
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -33,6 +43,18 @@ func OpenAIOAuthConfig() OAuthProviderConfig {
 		Scopes:     "openid profile email offline_access",
 		Originator: "codex_cli_rs",
 		Port:       1455,
+		Provider:   "openai",
+	}
+}
+
+func AnthropicOAuthConfig() OAuthProviderConfig {
+	return OAuthProviderConfig{
+		Issuer:        "https://console.anthropic.com",
+		ClientID:      "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+		Scopes:        "openid offline_access",
+		Port:          8080,
+		TokenEndpoint: "/v1/oauth/token",
+		Provider:      "anthropic",
 	}
 }
 
@@ -101,7 +123,7 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 		fmt.Printf("Could not open browser automatically.\nPlease open this URL manually:\n\n%s\n\n", authURL)
 	}
 
-	fmt.Println("If you're running in a headless environment, use: picoclaw auth login --provider openai --device-code")
+	fmt.Printf("If you're running in a headless environment, use: picoclaw auth login --provider %s --device-code\n", cfg.Provider)
 	fmt.Println("Waiting for authentication in browser...")
 
 	select {
@@ -270,7 +292,7 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		"scope":         {"openid profile email"},
 	}
 
-	resp, err := http.PostForm(cfg.Issuer+"/oauth/token", data)
+	resp, err := http.PostForm(cfg.tokenEndpointURL(), data)
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
@@ -290,15 +312,18 @@ func BuildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectU
 
 func buildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectURI string) string {
 	params := url.Values{
-		"response_type":              {"code"},
-		"client_id":                  {cfg.ClientID},
-		"redirect_uri":               {redirectURI},
-		"scope":                      {cfg.Scopes},
-		"code_challenge":             {pkce.CodeChallenge},
-		"code_challenge_method":      {"S256"},
-		"id_token_add_organizations": {"true"},
-		"codex_cli_simplified_flow":  {"true"},
-		"state":                      {state},
+		"response_type":         {"code"},
+		"client_id":             {cfg.ClientID},
+		"redirect_uri":          {redirectURI},
+		"scope":                 {cfg.Scopes},
+		"code_challenge":        {pkce.CodeChallenge},
+		"code_challenge_method": {"S256"},
+		"state":                 {state},
+	}
+	// OpenAI-specific parameters
+	if cfg.Provider == "openai" {
+		params.Set("id_token_add_organizations", "true")
+		params.Set("codex_cli_simplified_flow", "true")
 	}
 	if cfg.Originator != "" {
 		params.Set("originator", cfg.Originator)
@@ -315,7 +340,7 @@ func exchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 		"code_verifier": {codeVerifier},
 	}
 
-	resp, err := http.PostForm(cfg.Issuer+"/oauth/token", data)
+	resp, err := http.PostForm(cfg.tokenEndpointURL(), data)
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
 	}
@@ -326,7 +351,11 @@ func exchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 		return nil, fmt.Errorf("token exchange failed: %s", string(body))
 	}
 
-	return parseTokenResponse(body, "openai")
+	provider := cfg.Provider
+	if provider == "" {
+		provider = "openai"
+	}
+	return parseTokenResponse(body, provider)
 }
 
 func parseTokenResponse(body []byte, provider string) (*AuthCredential, error) {

@@ -16,6 +16,7 @@ func TestBuildAuthorizeURL(t *testing.T) {
 		Scopes:     "openid profile",
 		Originator: "codex_cli_rs",
 		Port:       1455,
+		Provider:   "openai",
 	}
 	pkce := PKCECodes{
 		CodeVerifier:  "test-verifier",
@@ -50,6 +51,34 @@ func TestBuildAuthorizeURL(t *testing.T) {
 	}
 	if !strings.Contains(u, "originator=codex_cli_rs") {
 		t.Error("URL missing originator")
+	}
+}
+
+func TestBuildAuthorizeURLAnthropic(t *testing.T) {
+	cfg := AnthropicOAuthConfig()
+	cfg.Issuer = "https://console.example.com" // override for test
+	pkce := PKCECodes{
+		CodeVerifier:  "test-verifier",
+		CodeChallenge: "test-challenge",
+	}
+
+	u := BuildAuthorizeURL(cfg, pkce, "test-state", "http://localhost:8080/auth/callback")
+
+	if !strings.HasPrefix(u, "https://console.example.com/oauth/authorize?") {
+		t.Errorf("URL does not start with expected prefix: %s", u)
+	}
+	if !strings.Contains(u, "client_id="+cfg.ClientID) {
+		t.Error("URL missing client_id")
+	}
+	// Anthropic should NOT have OpenAI-specific params
+	if strings.Contains(u, "id_token_add_organizations") {
+		t.Error("Anthropic URL should not contain id_token_add_organizations")
+	}
+	if strings.Contains(u, "codex_cli_simplified_flow") {
+		t.Error("Anthropic URL should not contain codex_cli_simplified_flow")
+	}
+	if strings.Contains(u, "originator") {
+		t.Error("Anthropic URL should not contain originator")
 	}
 }
 
@@ -149,6 +178,7 @@ func TestExchangeCodeForTokens(t *testing.T) {
 		ClientID: "test-client",
 		Scopes:   "openid",
 		Port:     1455,
+		Provider: "openai",
 	}
 
 	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "http://localhost:1455/auth/callback")
@@ -158,6 +188,53 @@ func TestExchangeCodeForTokens(t *testing.T) {
 
 	if cred.AccessToken != "mock-access-token" {
 		t.Errorf("AccessToken = %q, want %q", cred.AccessToken, "mock-access-token")
+	}
+	if cred.Provider != "openai" {
+		t.Errorf("Provider = %q, want %q", cred.Provider, "openai")
+	}
+}
+
+func TestExchangeCodeForTokensAnthropic(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/oauth/token" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		r.ParseForm()
+		if r.FormValue("grant_type") != "authorization_code" {
+			http.Error(w, "invalid grant_type", http.StatusBadRequest)
+			return
+		}
+
+		resp := map[string]interface{}{
+			"access_token":  "anthropic-access-token",
+			"refresh_token": "anthropic-refresh-token",
+			"expires_in":    3600,
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := OAuthProviderConfig{
+		Issuer:        server.URL,
+		ClientID:      "test-anthropic-client",
+		Scopes:        "openid offline_access",
+		Port:          8080,
+		TokenEndpoint: "/v1/oauth/token",
+		Provider:      "anthropic",
+	}
+
+	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "http://localhost:8080/auth/callback")
+	if err != nil {
+		t.Fatalf("exchangeCodeForTokens() error: %v", err)
+	}
+
+	if cred.AccessToken != "anthropic-access-token" {
+		t.Errorf("AccessToken = %q, want %q", cred.AccessToken, "anthropic-access-token")
+	}
+	if cred.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want %q", cred.Provider, "anthropic")
 	}
 }
 
@@ -232,6 +309,33 @@ func TestOpenAIOAuthConfig(t *testing.T) {
 	}
 	if cfg.Port != 1455 {
 		t.Errorf("Port = %d, want 1455", cfg.Port)
+	}
+	if cfg.Provider != "openai" {
+		t.Errorf("Provider = %q, want %q", cfg.Provider, "openai")
+	}
+}
+
+func TestAnthropicOAuthConfig(t *testing.T) {
+	cfg := AnthropicOAuthConfig()
+	if cfg.Issuer != "https://console.anthropic.com" {
+		t.Errorf("Issuer = %q, want %q", cfg.Issuer, "https://console.anthropic.com")
+	}
+	if cfg.ClientID != "9d1c250a-e61b-44d9-88ed-5944d1962f5e" {
+		t.Errorf("ClientID = %q, want %q", cfg.ClientID, "9d1c250a-e61b-44d9-88ed-5944d1962f5e")
+	}
+	if cfg.Port != 8080 {
+		t.Errorf("Port = %d, want 8080", cfg.Port)
+	}
+	if cfg.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want %q", cfg.Provider, "anthropic")
+	}
+	if cfg.TokenEndpoint != "/v1/oauth/token" {
+		t.Errorf("TokenEndpoint = %q, want %q", cfg.TokenEndpoint, "/v1/oauth/token")
+	}
+	// Verify tokenEndpointURL() resolves correctly
+	expectedURL := "https://console.anthropic.com/v1/oauth/token"
+	if cfg.tokenEndpointURL() != expectedURL {
+		t.Errorf("tokenEndpointURL() = %q, want %q", cfg.tokenEndpointURL(), expectedURL)
 	}
 }
 
