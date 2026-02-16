@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
+
+// thinkTagRe matches <think>...</think> reasoning blocks from models like DeepSeek/MiniMax.
+var thinkTagRe = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
 
 // KnowledgeExtractor extracts and consolidates knowledge from conversations.
 type KnowledgeExtractor struct {
@@ -132,6 +136,8 @@ func (ke *KnowledgeExtractor) extractFacts(ctx context.Context, userMsg, assista
 	}
 
 	content := strings.TrimSpace(resp.Content)
+	// Strip <think>...</think> reasoning blocks (MiniMax, DeepSeek, etc.)
+	content = thinkTagRe.ReplaceAllString(content, "")
 	// Strip markdown fences if present
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")
@@ -247,6 +253,7 @@ func (ke *KnowledgeExtractor) decideAction(ctx context.Context, fact ExtractedFa
 	}
 
 	content := strings.TrimSpace(resp.Content)
+	content = thinkTagRe.ReplaceAllString(content, "")
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimPrefix(content, "```")
 	content = strings.TrimSuffix(content, "```")
