@@ -56,19 +56,24 @@ func TestBuildAuthorizeURL(t *testing.T) {
 
 func TestBuildAuthorizeURLAnthropic(t *testing.T) {
 	cfg := AnthropicOAuthConfig()
-	cfg.Issuer = "https://console.example.com" // override for test
+	cfg.Issuer = "https://console.example.com"       // override for test
+	cfg.AuthorizeBaseURL = "https://claude.example.com" // override for test
 	pkce := PKCECodes{
 		CodeVerifier:  "test-verifier",
 		CodeChallenge: "test-challenge",
 	}
 
-	u := BuildAuthorizeURL(cfg, pkce, "test-state", "http://localhost:8080/auth/callback")
+	u := BuildAuthorizeURL(cfg, pkce, "test-state", "https://console.example.com/oauth/code/callback")
 
-	if !strings.HasPrefix(u, "https://console.example.com/oauth/authorize?") {
+	// Should use AuthorizeBaseURL, not Issuer
+	if !strings.HasPrefix(u, "https://claude.example.com/oauth/authorize?") {
 		t.Errorf("URL does not start with expected prefix: %s", u)
 	}
 	if !strings.Contains(u, "client_id="+cfg.ClientID) {
 		t.Error("URL missing client_id")
+	}
+	if !strings.Contains(u, "scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference") {
+		t.Errorf("URL missing correct scopes: %s", u)
 	}
 	// Anthropic should NOT have OpenAI-specific params
 	if strings.Contains(u, "id_token_add_organizations") {
@@ -201,8 +206,18 @@ func TestExchangeCodeForTokensAnthropic(t *testing.T) {
 			return
 		}
 
-		r.ParseForm()
-		if r.FormValue("grant_type") != "authorization_code" {
+		// Anthropic expects JSON body, not form-urlencoded
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			http.Error(w, "expected application/json, got "+ct, http.StatusBadRequest)
+			return
+		}
+
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		if body["grant_type"] != "authorization_code" {
 			http.Error(w, "invalid grant_type", http.StatusBadRequest)
 			return
 		}
@@ -219,13 +234,13 @@ func TestExchangeCodeForTokensAnthropic(t *testing.T) {
 	cfg := OAuthProviderConfig{
 		Issuer:        server.URL,
 		ClientID:      "test-anthropic-client",
-		Scopes:        "openid offline_access",
+		Scopes:        "org:create_api_key user:profile user:inference",
 		Port:          8080,
 		TokenEndpoint: "/v1/oauth/token",
 		Provider:      "anthropic",
 	}
 
-	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "http://localhost:8080/auth/callback")
+	cred, err := exchangeCodeForTokens(cfg, "test-code", "test-verifier", "https://console.anthropic.com/oauth/code/callback")
 	if err != nil {
 		t.Fatalf("exchangeCodeForTokens() error: %v", err)
 	}
@@ -331,6 +346,13 @@ func TestAnthropicOAuthConfig(t *testing.T) {
 	}
 	if cfg.TokenEndpoint != "/v1/oauth/token" {
 		t.Errorf("TokenEndpoint = %q, want %q", cfg.TokenEndpoint, "/v1/oauth/token")
+	}
+	if cfg.AuthorizeBaseURL != "https://claude.ai" {
+		t.Errorf("AuthorizeBaseURL = %q, want %q", cfg.AuthorizeBaseURL, "https://claude.ai")
+	}
+	expectedScopes := "org:create_api_key user:profile user:inference"
+	if cfg.Scopes != expectedScopes {
+		t.Errorf("Scopes = %q, want %q", cfg.Scopes, expectedScopes)
 	}
 	// Verify tokenEndpointURL() resolves correctly
 	expectedURL := "https://console.anthropic.com/v1/oauth/token"

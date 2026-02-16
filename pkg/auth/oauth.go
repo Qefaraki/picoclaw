@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -11,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -19,13 +22,14 @@ import (
 )
 
 type OAuthProviderConfig struct {
-	Issuer        string
-	ClientID      string
-	Scopes        string
-	Originator    string
-	Port          int
-	TokenEndpoint string // e.g. "/v1/oauth/token"; defaults to "/oauth/token"
-	Provider      string // "openai" or "anthropic"
+	Issuer           string
+	ClientID         string
+	Scopes           string
+	Originator       string
+	Port             int
+	TokenEndpoint    string // e.g. "/v1/oauth/token"; defaults to "/oauth/token"
+	Provider         string // "openai" or "anthropic"
+	AuthorizeBaseURL string // Override Issuer for authorize URL (e.g. "https://claude.ai")
 }
 
 // tokenEndpointURL returns the full URL for the token endpoint.
@@ -49,12 +53,13 @@ func OpenAIOAuthConfig() OAuthProviderConfig {
 
 func AnthropicOAuthConfig() OAuthProviderConfig {
 	return OAuthProviderConfig{
-		Issuer:        "https://console.anthropic.com",
-		ClientID:      "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-		Scopes:        "openid offline_access",
-		Port:          8080,
-		TokenEndpoint: "/v1/oauth/token",
-		Provider:      "anthropic",
+		Issuer:           "https://console.anthropic.com",
+		ClientID:         "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+		Scopes:           "org:create_api_key user:profile user:inference",
+		Port:             8080,
+		TokenEndpoint:    "/v1/oauth/token",
+		Provider:         "anthropic",
+		AuthorizeBaseURL: "https://claude.ai",
 	}
 }
 
@@ -75,6 +80,11 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 	state, err := generateState()
 	if err != nil {
 		return nil, fmt.Errorf("generating state: %w", err)
+	}
+
+	// Anthropic uses a server-side redirect URI — no local callback server needed
+	if cfg.Provider == "anthropic" {
+		return loginBrowserAnthropic(cfg, pkce, state)
 	}
 
 	redirectURI := fmt.Sprintf("http://localhost:%d/auth/callback", cfg.Port)
@@ -135,6 +145,31 @@ func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
 	case <-time.After(5 * time.Minute):
 		return nil, fmt.Errorf("authentication timed out after 5 minutes")
 	}
+}
+
+func loginBrowserAnthropic(cfg OAuthProviderConfig, pkce PKCECodes, state string) (*AuthCredential, error) {
+	redirectURI := "https://console.anthropic.com/oauth/code/callback"
+	authURL := buildAuthorizeURL(cfg, pkce, state, redirectURI)
+
+	fmt.Printf("Open this URL to authenticate:\n\n%s\n\n", authURL)
+
+	if err := openBrowser(authURL); err != nil {
+		fmt.Printf("Could not open browser automatically.\nPlease open this URL manually:\n\n%s\n\n", authURL)
+	}
+
+	fmt.Println("After authorizing, you will be redirected to a page showing your authorization code.")
+	fmt.Print("Paste the authorization code here: ")
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return nil, fmt.Errorf("failed to read authorization code")
+	}
+	code := strings.TrimSpace(scanner.Text())
+	if code == "" {
+		return nil, fmt.Errorf("empty authorization code")
+	}
+
+	return exchangeCodeForTokens(cfg, code, pkce.CodeVerifier, redirectURI)
 }
 
 type callbackResult struct {
@@ -285,14 +320,25 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		return nil, fmt.Errorf("no refresh token available")
 	}
 
-	data := url.Values{
-		"client_id":     {cfg.ClientID},
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {cred.RefreshToken},
-		"scope":         {"openid profile email"},
-	}
+	var resp *http.Response
+	var err error
 
-	resp, err := http.PostForm(cfg.tokenEndpointURL(), data)
+	if cfg.Provider == "anthropic" {
+		jsonBody, _ := json.Marshal(map[string]string{
+			"client_id":     cfg.ClientID,
+			"grant_type":    "refresh_token",
+			"refresh_token": cred.RefreshToken,
+		})
+		resp, err = http.Post(cfg.tokenEndpointURL(), "application/json", bytes.NewReader(jsonBody))
+	} else {
+		data := url.Values{
+			"client_id":     {cfg.ClientID},
+			"grant_type":    {"refresh_token"},
+			"refresh_token": {cred.RefreshToken},
+			"scope":         {cfg.Scopes},
+		}
+		resp, err = http.PostForm(cfg.tokenEndpointURL(), data)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
@@ -328,19 +374,36 @@ func buildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectU
 	if cfg.Originator != "" {
 		params.Set("originator", cfg.Originator)
 	}
-	return cfg.Issuer + "/oauth/authorize?" + params.Encode()
+	base := cfg.Issuer
+	if cfg.AuthorizeBaseURL != "" {
+		base = cfg.AuthorizeBaseURL
+	}
+	return base + "/oauth/authorize?" + params.Encode()
 }
 
 func exchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirectURI string) (*AuthCredential, error) {
-	data := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-		"client_id":     {cfg.ClientID},
-		"code_verifier": {codeVerifier},
-	}
+	var resp *http.Response
+	var err error
 
-	resp, err := http.PostForm(cfg.tokenEndpointURL(), data)
+	if cfg.Provider == "anthropic" {
+		jsonBody, _ := json.Marshal(map[string]string{
+			"grant_type":    "authorization_code",
+			"code":          code,
+			"redirect_uri":  redirectURI,
+			"client_id":     cfg.ClientID,
+			"code_verifier": codeVerifier,
+		})
+		resp, err = http.Post(cfg.tokenEndpointURL(), "application/json", bytes.NewReader(jsonBody))
+	} else {
+		data := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {code},
+			"redirect_uri":  {redirectURI},
+			"client_id":     {cfg.ClientID},
+			"code_verifier": {codeVerifier},
+		}
+		resp, err = http.PostForm(cfg.tokenEndpointURL(), data)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
 	}
