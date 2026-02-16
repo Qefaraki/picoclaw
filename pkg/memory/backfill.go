@@ -60,6 +60,14 @@ func Backfill(ctx context.Context, sessionsDir string, store *VectorStore, extra
 			continue
 		}
 
+		// Skip heartbeat and cron sessions — they're system-generated, not user conversations
+		name := file.Name()
+		if strings.HasPrefix(name, "heartbeat") || strings.HasPrefix(name, "cron-") {
+			stats.SessionsTotal--
+			fmt.Printf("  Skipping %s (system session)\n", name)
+			continue
+		}
+
 		if ctx.Err() != nil {
 			return stats, ctx.Err()
 		}
