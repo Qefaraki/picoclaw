@@ -654,6 +654,8 @@ func gatewayCmd() {
 		fmt.Println("✓ Device event service started")
 	}
 
+	agentLoop.SetStreamUpdater(channelManager.CreateStreamUpdater())
+
 	if err := channelManager.StartAll(ctx); err != nil {
 		fmt.Printf("Error starting channels: %v\n", err)
 	}

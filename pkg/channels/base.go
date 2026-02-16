@@ -17,6 +17,11 @@ type Channel interface {
 	IsAllowed(senderID string) bool
 }
 
+type StreamingChannel interface {
+	Channel
+	StreamUpdate(ctx context.Context, chatID string, partialContent string)
+}
+
 type BaseChannel struct {
 	config    interface{}
 	bus       *bus.MessageBus

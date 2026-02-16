@@ -91,6 +91,47 @@ func (p *ClaudeProvider) Chat(ctx context.Context, messages []Message, tools []T
 	return parseClaudeResponse(resp), nil
 }
 
+func (p *ClaudeProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}, onContent StreamCallback) (*LLMResponse, error) {
+	var opts []option.RequestOption
+	if p.tokenSource != nil {
+		tok, err := p.tokenSource()
+		if err != nil {
+			return nil, fmt.Errorf("refreshing token: %w", err)
+		}
+		opts = append(opts, option.WithAuthToken(tok))
+	}
+
+	params, err := buildClaudeParams(messages, tools, model, options)
+	if err != nil {
+		return nil, err
+	}
+
+	stream := p.client.Messages.NewStreaming(ctx, params, opts...)
+
+	message := anthropic.Message{}
+	for stream.Next() {
+		event := stream.Current()
+		if err := message.Accumulate(event); err != nil {
+			return nil, fmt.Errorf("accumulating stream event: %w", err)
+		}
+
+		switch ev := event.AsAny().(type) {
+		case anthropic.ContentBlockDeltaEvent:
+			switch delta := ev.Delta.AsAny().(type) {
+			case anthropic.TextDelta:
+				if onContent != nil {
+					onContent(delta.Text)
+				}
+			}
+		}
+	}
+	if stream.Err() != nil {
+		return nil, fmt.Errorf("claude streaming: %w", stream.Err())
+	}
+
+	return parseClaudeResponse(&message), nil
+}
+
 func (p *ClaudeProvider) GetDefaultModel() string {
 	return "claude-sonnet-4-5-20250929"
 }

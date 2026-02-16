@@ -326,6 +326,30 @@ func (m *Manager) UnregisterChannel(name string) {
 	delete(m.channels, name)
 }
 
+// CreateStreamUpdater returns a function that, given a channel name and chatID,
+// returns a callback for pushing streaming partial content to that channel.
+// Returns nil for channels that don't support streaming.
+func (m *Manager) CreateStreamUpdater() func(channel, chatID string) func(fullText string) {
+	return func(channelName, chatID string) func(fullText string) {
+		m.mu.RLock()
+		ch, exists := m.channels[channelName]
+		m.mu.RUnlock()
+
+		if !exists {
+			return nil
+		}
+
+		sc, ok := ch.(StreamingChannel)
+		if !ok {
+			return nil
+		}
+
+		return func(fullText string) {
+			sc.StreamUpdate(context.Background(), chatID, fullText)
+		}
+	}
+}
+
 func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, content string) error {
 	m.mu.RLock()
 	channel, exists := m.channels[channelName]

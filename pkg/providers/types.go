@@ -40,6 +40,13 @@ type LLMProvider interface {
 	GetDefaultModel() string
 }
 
+type StreamCallback func(contentDelta string)
+
+type StreamingProvider interface {
+	LLMProvider
+	ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}, onContent StreamCallback) (*LLMResponse, error)
+}
+
 type ToolDefinition struct {
 	Type     string                 `json:"type"`
 	Function ToolFunctionDefinition `json:"function"`

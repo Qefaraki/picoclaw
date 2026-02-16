@@ -166,6 +166,25 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 	return nil
 }
 
+func (c *TelegramChannel) StreamUpdate(ctx context.Context, chatID string, partialContent string) {
+	pID, ok := c.placeholders.Load(chatID)
+	if !ok {
+		return
+	}
+
+	numChatID, err := parseChatID(chatID)
+	if err != nil {
+		return
+	}
+
+	htmlContent := markdownToTelegramHTML(partialContent + " ...")
+	editMsg := tu.EditMessageText(tu.ID(numChatID), pID.(int), htmlContent)
+	editMsg.ParseMode = telego.ModeHTML
+
+	// Silently ignore edit failures (content unchanged, partial HTML, etc.)
+	_, _ = c.bot.EditMessageText(ctx, editMsg)
+}
+
 func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Update) {
 	message := update.Message
 	if message == nil {

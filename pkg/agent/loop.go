@@ -42,6 +42,7 @@ type AgentLoop struct {
 	tools          *tools.ToolRegistry
 	running        atomic.Bool
 	summarizing    sync.Map // Tracks which sessions are currently being summarized
+	streamUpdateFn func(channel, chatID string) func(fullText string)
 }
 
 // processOptions configures how a message is processed
@@ -364,6 +365,12 @@ func (al *AgentLoop) GetModel() string {
 	return al.model
 }
 
+// SetStreamUpdater sets the function used to create streaming update callbacks
+// for channels that support progressive message editing.
+func (al *AgentLoop) SetStreamUpdater(fn func(channel, chatID string) func(fullText string)) {
+	al.streamUpdateFn = fn
+}
+
 // runAgentLoop is the core message processing logic.
 // It handles context building, LLM calls, tool execution, and response handling.
 func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (string, error) {
@@ -482,11 +489,31 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				"tools_json":    formatToolsForLog(providerToolDefs),
 			})
 
-		// Call LLM
-		response, err := al.provider.Chat(ctx, messages, providerToolDefs, al.model, map[string]interface{}{
+		// Call LLM (with streaming if available)
+		llmOpts := map[string]interface{}{
 			"max_tokens":  8192,
 			"temperature": 0.7,
-		})
+		}
+
+		var response *providers.LLMResponse
+		var err error
+		var notifier *bus.StreamNotifier
+
+		sp, canStream := al.provider.(providers.StreamingProvider)
+		var streamCb func(fullText string)
+		if canStream && al.streamUpdateFn != nil {
+			streamCb = al.streamUpdateFn(opts.Channel, opts.ChatID)
+		}
+
+		if canStream && streamCb != nil {
+			notifier = bus.NewStreamNotifier(1500*time.Millisecond, streamCb)
+			response, err = sp.ChatStream(ctx, messages, providerToolDefs, al.model, llmOpts, func(delta string) {
+				notifier.Append(delta)
+			})
+			notifier.Flush()
+		} else {
+			response, err = al.provider.Chat(ctx, messages, providerToolDefs, al.model, llmOpts)
+		}
 
 		if err != nil {
 			logger.ErrorCF("agent", "LLM call failed",

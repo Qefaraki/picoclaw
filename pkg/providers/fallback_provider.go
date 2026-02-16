@@ -40,6 +40,28 @@ func (p *FallbackProvider) Chat(ctx context.Context, messages []Message, tools [
 	return fbResp, nil
 }
 
+func (p *FallbackProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}, onContent StreamCallback) (*LLMResponse, error) {
+	// Try primary with streaming if supported, else fall back to Chat
+	var resp *LLMResponse
+	var err error
+	if sp, ok := p.primary.(StreamingProvider); ok {
+		resp, err = sp.ChatStream(ctx, messages, tools, model, options, onContent)
+	} else {
+		resp, err = p.primary.Chat(ctx, messages, tools, model, options)
+	}
+	if err == nil {
+		return resp, nil
+	}
+
+	logger.WarnCF("fallback", fmt.Sprintf("Primary provider failed (%s), falling back to %s: %v", model, p.fallbackModel, err), nil)
+
+	// Try fallback with streaming if supported, else fall back to Chat
+	if sp, ok := p.fallback.(StreamingProvider); ok {
+		return sp.ChatStream(ctx, messages, tools, p.fallbackModel, options, onContent)
+	}
+	return p.fallback.Chat(ctx, messages, tools, p.fallbackModel, options)
+}
+
 func (p *FallbackProvider) GetDefaultModel() string {
 	return p.primaryModel
 }
