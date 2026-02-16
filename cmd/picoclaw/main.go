@@ -397,7 +397,7 @@ func agentCmd() {
 		os.Exit(1)
 	}
 
-	provider, err := providers.CreateProvider(cfg)
+	provider, err := providers.CreateProviderWithFallback(cfg)
 	if err != nil {
 		fmt.Printf("Error creating provider: %v\n", err)
 		os.Exit(1)
@@ -532,7 +532,7 @@ func gatewayCmd() {
 		os.Exit(1)
 	}
 
-	provider, err := providers.CreateProvider(cfg)
+	provider, err := providers.CreateProviderWithFallback(cfg)
 	if err != nil {
 		fmt.Printf("Error creating provider: %v\n", err)
 		os.Exit(1)

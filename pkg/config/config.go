@@ -66,6 +66,8 @@ type AgentDefaults struct {
 	MaxTokens           int     `json:"max_tokens" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	Temperature         float64 `json:"temperature" env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations   int     `json:"max_tool_iterations" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	FallbackProvider    string  `json:"fallback_provider,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_FALLBACK_PROVIDER"`
+	FallbackModel       string  `json:"fallback_model,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_FALLBACK_MODEL"`
 }
 
 type ChannelsConfig struct {

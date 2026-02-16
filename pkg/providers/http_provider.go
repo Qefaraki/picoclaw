@@ -456,3 +456,34 @@ func CreateProvider(cfg *config.Config) (LLMProvider, error) {
 
 	return NewHTTPProvider(apiKey, apiBase, proxy), nil
 }
+
+// CreateProviderWithFallback creates a provider wrapped with an optional fallback.
+// If fallback_provider and fallback_model are configured, failures on the primary
+// provider automatically retry with the fallback.
+func CreateProviderWithFallback(cfg *config.Config) (LLMProvider, error) {
+	primary, err := CreateProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	fbProvider := cfg.Agents.Defaults.FallbackProvider
+	fbModel := cfg.Agents.Defaults.FallbackModel
+	if fbProvider == "" || fbModel == "" {
+		return primary, nil
+	}
+
+	// Build a temporary config with the fallback as the primary to reuse CreateProvider
+	fbCfg := *cfg
+	fbCfg.Agents.Defaults.Provider = fbProvider
+	fbCfg.Agents.Defaults.Model = fbModel
+	fbCfg.Agents.Defaults.FallbackProvider = "" // prevent recursion
+	fbCfg.Agents.Defaults.FallbackModel = ""
+
+	fallback, err := CreateProvider(&fbCfg)
+	if err != nil {
+		// Fallback creation failed — just use primary without fallback
+		return primary, nil
+	}
+
+	return NewFallbackProvider(primary, fallback, cfg.Agents.Defaults.Model, fbModel), nil
+}

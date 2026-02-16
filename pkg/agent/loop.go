@@ -263,6 +263,11 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return al.processSystemMessage(ctx, msg)
 	}
 
+	// Handle /model command — lets user switch model mid-session
+	if resp, handled := al.handleModelCommand(msg.Content); handled {
+		return resp, nil
+	}
+
 	// Process as user message
 	return al.runAgentLoop(ctx, processOptions{
 		SessionKey:      msg.SessionKey,
@@ -325,6 +330,38 @@ func (al *AgentLoop) processSystemMessage(ctx context.Context, msg bus.InboundMe
 
 	// Agent only logs, does not respond to user
 	return "", nil
+}
+
+// handleModelCommand intercepts /model commands from the user.
+// /model — shows current model
+// /model <name> — switches to a different model
+func (al *AgentLoop) handleModelCommand(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "/model") {
+		return "", false
+	}
+
+	parts := strings.Fields(trimmed)
+	if len(parts) == 1 {
+		// Just "/model" — show current
+		return fmt.Sprintf("Current model: `%s`", al.model), true
+	}
+
+	newModel := parts[1]
+	oldModel := al.model
+	al.model = newModel
+	logger.InfoCF("agent", fmt.Sprintf("Model switched: %s -> %s", oldModel, newModel), nil)
+	return fmt.Sprintf("Model switched: `%s` -> `%s`", oldModel, newModel), true
+}
+
+// SetModel changes the active model at runtime.
+func (al *AgentLoop) SetModel(model string) {
+	al.model = model
+}
+
+// GetModel returns the current active model.
+func (al *AgentLoop) GetModel() string {
+	return al.model
 }
 
 // runAgentLoop is the core message processing logic.
