@@ -149,6 +149,21 @@ func buildClaudeParams(messages []Message, tools []ToolDefinition, model string,
 				anthropicMessages = append(anthropicMessages,
 					anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
 				)
+			} else if len(msg.ContentParts) > 0 {
+				// Multimodal user message with images/text parts
+				var blocks []anthropic.ContentBlockParamUnion
+				if msg.Content != "" {
+					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+				}
+				for _, part := range msg.ContentParts {
+					switch part.Type {
+					case "image":
+						blocks = append(blocks, anthropic.NewImageBlockBase64(part.MediaType, part.Data))
+					case "text":
+						blocks = append(blocks, anthropic.NewTextBlock(part.Text))
+					}
+				}
+				anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(blocks...))
 			} else {
 				anthropicMessages = append(anthropicMessages,
 					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),

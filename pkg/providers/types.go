@@ -1,6 +1,10 @@
 package providers
 
-import "context"
+import (
+	"context"
+
+	"github.com/sipeed/picoclaw/pkg/media"
+)
 
 type ToolCall struct {
 	ID        string                 `json:"id"`
@@ -29,10 +33,11 @@ type UsageInfo struct {
 }
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role         string              `json:"role"`
+	Content      string              `json:"content"`
+	ContentParts []media.ContentPart `json:"content_parts,omitempty"`
+	ToolCalls    []ToolCall          `json:"tool_calls,omitempty"`
+	ToolCallID   string              `json:"tool_call_id,omitempty"`
 }
 
 type LLMProvider interface {

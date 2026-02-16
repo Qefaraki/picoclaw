@@ -167,7 +167,7 @@ func (c *QQChannel) handleC2CMessage() event.C2CMessageEventHandler {
 			"message_id": data.ID,
 		}
 
-		c.HandleMessage(senderID, senderID, content, []string{}, metadata)
+		c.HandleMessage(senderID, senderID, content, nil, metadata)
 
 		return nil
 	}
@@ -209,7 +209,7 @@ func (c *QQChannel) handleGroupATMessage() event.GroupATMessageEventHandler {
 			"group_id":   data.GroupID,
 		}
 
-		c.HandleMessage(senderID, data.GroupID, content, []string{}, metadata)
+		c.HandleMessage(senderID, data.GroupID, content, nil, metadata)
 
 		return nil
 	}

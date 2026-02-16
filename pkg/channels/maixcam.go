@@ -174,7 +174,7 @@ func (c *MaixCamChannel) handlePersonDetection(msg MaixCamMessage) {
 		"h":         fmt.Sprintf("%.0f", h),
 	}
 
-	c.HandleMessage(senderID, chatID, content, []string{}, metadata)
+	c.HandleMessage(senderID, chatID, content, nil, metadata)
 }
 
 func (c *MaixCamChannel) handleStatusUpdate(msg MaixCamMessage) {

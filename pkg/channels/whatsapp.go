@@ -160,15 +160,9 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]interface{}) {
 		content = ""
 	}
 
-	var mediaPaths []string
-	if mediaData, ok := msg["media"].([]interface{}); ok {
-		mediaPaths = make([]string, 0, len(mediaData))
-		for _, m := range mediaData {
-			if path, ok := m.(string); ok {
-				mediaPaths = append(mediaPaths, path)
-			}
-		}
-	}
+	// WhatsApp media paths are not processed into ContentParts here
+	// as the bridge handles media separately. Pass nil for now.
+	_ = msg["media"] // acknowledge field exists
 
 	metadata := make(map[string]string)
 	if messageID, ok := msg["id"].(string); ok {
@@ -180,5 +174,5 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]interface{}) {
 
 	log.Printf("WhatsApp message from %s: %s...", senderID, utils.Truncate(content, 50))
 
-	c.HandleMessage(senderID, chatID, content, mediaPaths, metadata)
+	c.HandleMessage(senderID, chatID, content, nil, metadata)
 }

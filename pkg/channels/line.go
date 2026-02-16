@@ -18,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -306,7 +307,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	}
 
 	var content string
-	var mediaPaths []string
+	var mediaParts []media.ContentPart
 	localFiles := []string{}
 
 	defer func() {
@@ -331,21 +332,22 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 		localPath := c.downloadContent(msg.ID, "image.jpg")
 		if localPath != "" {
 			localFiles = append(localFiles, localPath)
-			mediaPaths = append(mediaPaths, localPath)
+			part, err := media.ProcessFile(localPath)
+			if err == nil && part != nil {
+				mediaParts = append(mediaParts, *part)
+			}
 			content = "[image]"
 		}
 	case "audio":
 		localPath := c.downloadContent(msg.ID, "audio.m4a")
 		if localPath != "" {
 			localFiles = append(localFiles, localPath)
-			mediaPaths = append(mediaPaths, localPath)
 			content = "[audio]"
 		}
 	case "video":
 		localPath := c.downloadContent(msg.ID, "video.mp4")
 		if localPath != "" {
 			localFiles = append(localFiles, localPath)
-			mediaPaths = append(mediaPaths, localPath)
 			content = "[video]"
 		}
 	case "file":
@@ -377,7 +379,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	// Show typing/loading indicator (requires user ID, not group ID)
 	c.sendLoading(senderID)
 
-	c.HandleMessage(senderID, chatID, content, mediaPaths, metadata)
+	c.HandleMessage(senderID, chatID, content, mediaParts, metadata)
 }
 
 // isBotMentioned checks if the bot is mentioned in the message.

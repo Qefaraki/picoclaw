@@ -10,6 +10,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/utils"
 	"github.com/sipeed/picoclaw/pkg/voice"
 )
@@ -155,10 +156,9 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	}
 
 	content := m.Content
-	mediaPaths := make([]string, 0, len(m.Attachments))
+	var mediaParts []media.ContentPart
 	localFiles := make([]string, 0, len(m.Attachments))
 
-	// 确保临时文件在函数返回时被清理
 	defer func() {
 		for _, file := range localFiles {
 			if err := os.Remove(file); err != nil {
@@ -182,7 +182,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 				if c.transcriber != nil && c.transcriber.IsAvailable() {
 					ctx, cancel := context.WithTimeout(c.getContext(), transcriptionTimeout)
 					result, err := c.transcriber.Transcribe(ctx, localPath)
-					cancel() // 立即释放context资源，避免在for循环中泄漏
+					cancel()
 
 					if err != nil {
 						logger.ErrorCF("discord", "Voice transcription failed", map[string]any{
@@ -201,20 +201,23 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 
 				content = appendContent(content, transcribedText)
 			} else {
-				logger.WarnCF("discord", "Failed to download audio attachment", map[string]any{
-					"url":      attachment.URL,
-					"filename": attachment.Filename,
-				})
-				mediaPaths = append(mediaPaths, attachment.URL)
 				content = appendContent(content, fmt.Sprintf("[attachment: %s]", attachment.URL))
 			}
 		} else {
-			mediaPaths = append(mediaPaths, attachment.URL)
-			content = appendContent(content, fmt.Sprintf("[attachment: %s]", attachment.URL))
+			// Download non-audio attachments and process into ContentParts
+			localPath := c.downloadAttachment(attachment.URL, attachment.Filename)
+			if localPath != "" {
+				localFiles = append(localFiles, localPath)
+				part, err := media.ProcessFile(localPath)
+				if err == nil && part != nil {
+					mediaParts = append(mediaParts, *part)
+				}
+			}
+			content = appendContent(content, fmt.Sprintf("[attachment: %s]", attachment.Filename))
 		}
 	}
 
-	if content == "" && len(mediaPaths) == 0 {
+	if content == "" && len(mediaParts) == 0 {
 		return
 	}
 
@@ -238,7 +241,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		"is_dm":        fmt.Sprintf("%t", m.GuildID == ""),
 	}
 
-	c.HandleMessage(senderID, m.ChannelID, content, mediaPaths, metadata)
+	c.HandleMessage(senderID, m.ChannelID, content, mediaParts, metadata)
 }
 
 func (c *DiscordChannel) downloadAttachment(url, filename string) string {

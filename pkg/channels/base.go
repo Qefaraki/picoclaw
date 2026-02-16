@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/media"
 )
 
 type Channel interface {
@@ -87,7 +88,7 @@ func (c *BaseChannel) IsAllowed(senderID string) bool {
 	return false
 }
 
-func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []string, metadata map[string]string) {
+func (c *BaseChannel) HandleMessage(senderID, chatID, content string, mediaParts []media.ContentPart, metadata map[string]string) {
 	if !c.IsAllowed(senderID) {
 		return
 	}
@@ -100,7 +101,7 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 		SenderID:   senderID,
 		ChatID:     chatID,
 		Content:    content,
-		Media:      media,
+		Media:      mediaParts,
 		SessionKey: sessionKey,
 		Metadata:   metadata,
 	}

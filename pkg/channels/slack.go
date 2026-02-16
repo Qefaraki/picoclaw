@@ -15,6 +15,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/utils"
 	"github.com/sipeed/picoclaw/pkg/voice"
 )
@@ -229,10 +230,9 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 	content := ev.Text
 	content = c.stripBotMention(content)
 
-	var mediaPaths []string
-	localFiles := []string{} // 跟踪需要清理的本地文件
+	var mediaParts []media.ContentPart
+	localFiles := []string{}
 
-	// 确保临时文件在函数返回时被清理
 	defer func() {
 		for _, file := range localFiles {
 			if err := os.Remove(file); err != nil {
@@ -251,7 +251,6 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 				continue
 			}
 			localFiles = append(localFiles, localPath)
-			mediaPaths = append(mediaPaths, localPath)
 
 			if utils.IsAudioFile(file.Name, file.Mimetype) && c.transcriber != nil && c.transcriber.IsAvailable() {
 				ctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
@@ -265,6 +264,10 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 					content += fmt.Sprintf("\n[voice transcription: %s]", result.Text)
 				}
 			} else {
+				part, err := media.ProcessFile(localPath)
+				if err == nil && part != nil {
+					mediaParts = append(mediaParts, *part)
+				}
 				content += fmt.Sprintf("\n[file: %s]", file.Name)
 			}
 		}
@@ -288,7 +291,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 		"has_thread": threadTS != "",
 	})
 
-	c.HandleMessage(senderID, chatID, content, mediaPaths, metadata)
+	c.HandleMessage(senderID, chatID, content, mediaParts, metadata)
 }
 
 func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {

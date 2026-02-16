@@ -49,6 +49,47 @@ func NewHTTPProvider(apiKey, apiBase, proxy string) *HTTPProvider {
 	}
 }
 
+// prepareMessages converts messages with ContentParts to OpenAI multimodal format.
+// Messages without ContentParts are passed through unchanged.
+func prepareMessages(messages []Message) []interface{} {
+	result := make([]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role == "user" && len(msg.ContentParts) > 0 {
+			// Build OpenAI content array format
+			var contentArray []map[string]interface{}
+			if msg.Content != "" {
+				contentArray = append(contentArray, map[string]interface{}{
+					"type": "text",
+					"text": msg.Content,
+				})
+			}
+			for _, part := range msg.ContentParts {
+				switch part.Type {
+				case "image":
+					contentArray = append(contentArray, map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]string{
+							"url": fmt.Sprintf("data:%s;base64,%s", part.MediaType, part.Data),
+						},
+					})
+				case "text":
+					contentArray = append(contentArray, map[string]interface{}{
+						"type": "text",
+						"text": part.Text,
+					})
+				}
+			}
+			result = append(result, map[string]interface{}{
+				"role":    msg.Role,
+				"content": contentArray,
+			})
+		} else {
+			result = append(result, msg)
+		}
+	}
+	return result
+}
+
 func (p *HTTPProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}) (*LLMResponse, error) {
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
@@ -64,7 +105,7 @@ func (p *HTTPProvider) Chat(ctx context.Context, messages []Message, tools []Too
 
 	requestBody := map[string]interface{}{
 		"model":    model,
-		"messages": messages,
+		"messages": prepareMessages(messages),
 	}
 
 	if len(tools) > 0 {
@@ -208,9 +249,9 @@ func (p *HTTPProvider) ChatStream(ctx context.Context, messages []Message, tools
 	}
 
 	requestBody := map[string]interface{}{
-		"model":  model,
-		"messages": messages,
-		"stream": true,
+		"model":    model,
+		"messages": prepareMessages(messages),
+		"stream":   true,
 	}
 
 	if len(tools) > 0 {

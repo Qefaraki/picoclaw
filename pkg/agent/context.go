@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -80,7 +81,14 @@ Your workspace is at: %s
 
 2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
-3. **Memory** - When remembering something, write to %s/memory/MEMORY.md`,
+3. **Memory** - When remembering something, write to %s/memory/MEMORY.md
+
+4. **Semantic Memory** - You have a search_memory tool. USE IT PROACTIVELY at the start of conversations and whenever the user mentions anything that might relate to a previous conversation. Specifically:
+   - When a user starts a new conversation, search for relevant context about them
+   - When the user references something from the past ("remember when...", "like I said", "that thing about...")
+   - When the user asks about their own preferences, plans, deadlines, or personal info
+   - When you're unsure about context — search first, then respond
+   - Do NOT wait for the user to explicitly ask you to remember. If there's any chance prior context would help, search for it.`,
 		now, runtime, workspacePath, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath)
 }
 
@@ -157,7 +165,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	return result
 }
 
-func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID string) []providers.Message {
+func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, mediaParts []media.ContentPart, channel, chatID string) []providers.Message {
 	messages := []providers.Message{}
 
 	systemPrompt := cb.BuildSystemPrompt()
@@ -207,10 +215,20 @@ func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary str
 
 	messages = append(messages, history...)
 
-	messages = append(messages, providers.Message{
+	// Build user message — multimodal if media parts are present
+	userMsg := providers.Message{
 		Role:    "user",
 		Content: currentMessage,
-	})
+	}
+	if len(mediaParts) > 0 {
+		userMsg.ContentParts = mediaParts
+		logger.DebugCF("agent", "Building multimodal user message",
+			map[string]interface{}{
+				"text_len":    len(currentMessage),
+				"media_parts": len(mediaParts),
+			})
+	}
+	messages = append(messages, userMsg)
 
 	return messages
 }

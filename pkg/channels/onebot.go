@@ -635,7 +635,7 @@ func (c *OneBotChannel) handleMessage(evt *oneBotEvent) {
 		"content":   truncate(content, 100),
 	})
 
-	c.HandleMessage(senderID, chatID, content, []string{}, metadata)
+	c.HandleMessage(senderID, chatID, content, nil, metadata)
 }
 
 func (c *OneBotChannel) isDuplicate(messageID string) bool {

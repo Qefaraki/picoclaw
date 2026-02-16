@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/utils"
 	"github.com/sipeed/picoclaw/pkg/voice"
 )
@@ -215,10 +216,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 	c.chatIDs[senderID] = chatID
 
 	content := ""
-	mediaPaths := []string{}
-	localFiles := []string{} // 跟踪需要清理的本地文件
+	var mediaParts []media.ContentPart
+	localFiles := []string{} // track temp files for cleanup
 
-	// 确保临时文件在函数返回时被清理
+	// Cleanup temp files AFTER we've processed them into ContentParts (bytes in memory).
 	defer func() {
 		for _, file := range localFiles {
 			if err := os.Remove(file); err != nil {
@@ -246,11 +247,14 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		photoPath := c.downloadPhoto(ctx, photo.FileID)
 		if photoPath != "" {
 			localFiles = append(localFiles, photoPath)
-			mediaPaths = append(mediaPaths, photoPath)
+			part, err := media.ProcessFile(photoPath)
+			if err == nil && part != nil {
+				mediaParts = append(mediaParts, *part)
+			}
 			if content != "" {
 				content += "\n"
 			}
-			content += fmt.Sprintf("[image: photo]")
+			content += "[image: photo]"
 		}
 	}
 
@@ -258,7 +262,6 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		voicePath := c.downloadFile(ctx, message.Voice.FileID, ".ogg")
 		if voicePath != "" {
 			localFiles = append(localFiles, voicePath)
-			mediaPaths = append(mediaPaths, voicePath)
 
 			transcribedText := ""
 			if c.transcriber != nil && c.transcriber.IsAvailable() {
@@ -271,7 +274,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 						"error": err.Error(),
 						"path":  voicePath,
 					})
-					transcribedText = fmt.Sprintf("[voice (transcription failed)]")
+					transcribedText = "[voice (transcription failed)]"
 				} else {
 					transcribedText = fmt.Sprintf("[voice transcription: %s]", result.Text)
 					logger.InfoCF("telegram", "Voice transcribed successfully", map[string]interface{}{
@@ -279,7 +282,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 					})
 				}
 			} else {
-				transcribedText = fmt.Sprintf("[voice]")
+				transcribedText = "[voice]"
 			}
 
 			if content != "" {
@@ -293,11 +296,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		audioPath := c.downloadFile(ctx, message.Audio.FileID, ".mp3")
 		if audioPath != "" {
 			localFiles = append(localFiles, audioPath)
-			mediaPaths = append(mediaPaths, audioPath)
 			if content != "" {
 				content += "\n"
 			}
-			content += fmt.Sprintf("[audio]")
+			content += "[audio]"
 		}
 	}
 
@@ -305,11 +307,14 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		docPath := c.downloadFile(ctx, message.Document.FileID, "")
 		if docPath != "" {
 			localFiles = append(localFiles, docPath)
-			mediaPaths = append(mediaPaths, docPath)
+			part, err := media.ProcessFile(docPath)
+			if err == nil && part != nil {
+				mediaParts = append(mediaParts, *part)
+			}
 			if content != "" {
 				content += "\n"
 			}
-			content += fmt.Sprintf("[file]")
+			content += "[file]"
 		}
 	}
 
@@ -339,6 +344,14 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		}
 	}
 
+	// Delete old placeholder if one exists (follow-up message while processing)
+	if oldPID, ok := c.placeholders.LoadAndDelete(chatIDStr); ok {
+		_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+			ChatID:    tu.ID(chatID),
+			MessageID: oldPID.(int),
+		})
+	}
+
 	// Create cancel function for thinking state
 	_, thinkCancel := context.WithTimeout(ctx, 5*time.Minute)
 	c.stopThinking.Store(chatIDStr, &thinkingCancel{fn: thinkCancel})
@@ -357,7 +370,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
 
-	c.HandleMessage(senderID, fmt.Sprintf("%d", chatID), content, mediaPaths, metadata)
+	c.HandleMessage(senderID, fmt.Sprintf("%d", chatID), content, mediaParts, metadata)
 }
 
 func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) string {

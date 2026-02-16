@@ -19,10 +19,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	chromem "github.com/philippgille/chromem-go"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/media"
+	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
@@ -65,23 +68,32 @@ type AgentLoop struct {
 	running        atomic.Bool
 	summarizing    sync.Map // Tracks which sessions are currently being summarized
 	streamUpdateFn func(channel, chatID string) func(fullText string)
+	vectorStore    *memory.VectorStore
+	extractor      *memory.KnowledgeExtractor
+
+	// Message injection: routes new messages to active session or pending queue
+	pendingMu     sync.Mutex
+	pendingMsgs   chan bus.InboundMessage // messages for non-active sessions
+	interruptCh   chan bus.InboundMessage // messages for the currently active session
+	activeSession string                  // session key being processed right now
 }
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey      string // Session identifier for history/context
-	Channel         string // Target channel for tool execution
-	ChatID          string // Target chat ID for tool execution
-	UserMessage     string // User message content (may include prefix)
-	DefaultResponse string // Response when LLM returns empty
-	EnableSummary   bool   // Whether to trigger summarization
-	SendResponse    bool   // Whether to send response via bus
-	NoHistory       bool   // If true, don't load session history (for heartbeat)
+	SessionKey      string              // Session identifier for history/context
+	Channel         string              // Target channel for tool execution
+	ChatID          string              // Target chat ID for tool execution
+	UserMessage     string              // User message content (may include prefix)
+	Media           []media.ContentPart // Multimodal content (images, files)
+	DefaultResponse string              // Response when LLM returns empty
+	EnableSummary   bool                // Whether to trigger summarization
+	SendResponse    bool                // Whether to send response via bus
+	NoHistory       bool                // If true, don't load session history (for heartbeat)
 }
 
 // createToolRegistry creates a tool registry with common tools.
 // This is shared between main agent and subagents.
-func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msgBus *bus.MessageBus) *tools.ToolRegistry {
+func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msgBus *bus.MessageBus, vectorStore *memory.VectorStore) *tools.ToolRegistry {
 	registry := tools.NewToolRegistry()
 
 	// File system tools
@@ -126,6 +138,11 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 		}))
 	}
 
+	// Semantic memory search
+	if vectorStore != nil {
+		registry.Register(tools.NewMemorySearchTool(vectorStore))
+	}
+
 	// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 	registry.Register(tools.NewI2CTool())
 	registry.Register(tools.NewSPITool())
@@ -152,12 +169,38 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 
 	restrict := cfg.Agents.Defaults.RestrictToWorkspace
 
+	// Initialize semantic memory (vector store) if configured
+	var vectorStore *memory.VectorStore
+	var extractor *memory.KnowledgeExtractor
+
+	if cfg.Tools.Memory.SemanticSearch {
+		embeddingFn := resolveEmbeddingFunc(cfg)
+		if embeddingFn != nil {
+			vs, err := memory.NewVectorStore(workspace, embeddingFn)
+			if err != nil {
+				logger.WarnCF("agent", "Failed to initialize vector store, semantic memory disabled", map[string]interface{}{
+					"error": err.Error(),
+				})
+			} else {
+				vectorStore = vs
+				if cfg.Tools.Memory.KnowledgeExtract {
+					extractor = memory.NewKnowledgeExtractor(provider, cfg.Agents.Defaults.Model, vs)
+				}
+				logger.InfoCF("agent", "Semantic memory initialized", map[string]interface{}{
+					"knowledge_extract": cfg.Tools.Memory.KnowledgeExtract,
+				})
+			}
+		} else {
+			logger.InfoCF("agent", "No embedding API key available, semantic memory disabled", nil)
+		}
+	}
+
 	// Create tool registry for main agent
-	toolsRegistry := createToolRegistry(workspace, restrict, cfg, msgBus)
+	toolsRegistry := createToolRegistry(workspace, restrict, cfg, msgBus, vectorStore)
 
 	// Create subagent manager with its own tool registry
 	subagentManager := tools.NewSubagentManager(provider, cfg.Agents.Defaults.Model, workspace, msgBus)
-	subagentTools := createToolRegistry(workspace, restrict, cfg, msgBus)
+	subagentTools := createToolRegistry(workspace, restrict, cfg, msgBus, vectorStore)
 	// Subagent doesn't need spawn/subagent tools to avoid recursion
 	subagentManager.SetTools(subagentTools)
 
@@ -190,30 +233,45 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		contextBuilder: contextBuilder,
 		tools:          toolsRegistry,
 		summarizing:    sync.Map{},
+		vectorStore:    vectorStore,
+		extractor:      extractor,
 	}
 }
 
 func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
+	al.pendingMsgs = make(chan bus.InboundMessage, 100)
+	al.interruptCh = make(chan bus.InboundMessage, 10)
+
+	// Start router goroutine: reads from bus and routes to pending or interrupt
+	go al.routeMessages(ctx)
 
 	for al.running.Load() {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
-			msg, ok := al.bus.ConsumeInbound(ctx)
+		case msg, ok := <-al.pendingMsgs:
 			if !ok {
-				continue
+				return nil
 			}
+
+			// Mark this session as active so new messages for it go to interruptCh
+			al.pendingMu.Lock()
+			al.activeSession = msg.SessionKey
+			al.pendingMu.Unlock()
 
 			response, err := al.processMessage(ctx, msg)
 			if err != nil {
 				response = fmt.Sprintf("Error processing message: %v", err)
 			}
 
+			// Clear active session
+			al.pendingMu.Lock()
+			al.activeSession = ""
+			al.pendingMu.Unlock()
+
 			if response != "" {
 				// Check if the message tool already sent a response during this round.
-				// If so, skip publishing to avoid duplicate messages to the user.
 				alreadySent := false
 				if tool, ok := al.tools.Get("message"); ok {
 					if mt, ok := tool.(*tools.MessageTool); ok {
@@ -233,6 +291,39 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// routeMessages reads from the bus and routes messages to either the interrupt
+// channel (if the message targets the currently active session) or the pending
+// queue (for normal sequential processing).
+func (al *AgentLoop) routeMessages(ctx context.Context) {
+	for {
+		msg, ok := al.bus.ConsumeInbound(ctx)
+		if !ok {
+			return
+		}
+
+		al.pendingMu.Lock()
+		active := al.activeSession
+		al.pendingMu.Unlock()
+
+		if active != "" && msg.SessionKey == active {
+			// This message targets the session currently being processed — inject it
+			logger.InfoCF("agent", "Routing message to interrupt channel",
+				map[string]interface{}{
+					"session_key": msg.SessionKey,
+					"preview":     utils.Truncate(msg.Content, 60),
+				})
+			select {
+			case al.interruptCh <- msg:
+			default:
+				// Buffer full — fall through to pending
+				al.pendingMsgs <- msg
+			}
+		} else {
+			al.pendingMsgs <- msg
+		}
+	}
 }
 
 func (al *AgentLoop) Stop() {
@@ -318,6 +409,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Channel:         msg.Channel,
 		ChatID:          msg.ChatID,
 		UserMessage:     msg.Content,
+		Media:           msg.Media,
 		DefaultResponse: "I've completed processing but have no response to give.",
 		EnableSummary:   true,
 		SendResponse:    false,
@@ -442,7 +534,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		history,
 		summary,
 		opts.UserMessage,
-		nil,
+		opts.Media,
 		opts.Channel,
 		opts.ChatID,
 	)
@@ -468,12 +560,20 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 	al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
 	al.sessions.Save(opts.SessionKey)
 
-	// 7. Optional: summarization
+	// 7. Async: index conversation and extract knowledge
+	if al.vectorStore != nil && !opts.NoHistory {
+		go al.vectorStore.IndexConversation(context.Background(), opts.SessionKey, opts.Channel, opts.ChatID, opts.UserMessage, finalContent)
+		if al.extractor != nil {
+			go al.extractor.ExtractAndConsolidate(context.Background(), opts.UserMessage, finalContent, opts.SessionKey)
+		}
+	}
+
+	// 8. Optional: summarization
 	if opts.EnableSummary {
 		al.maybeSummarize(opts.SessionKey)
 	}
 
-	// 8. Optional: send response via bus
+	// 9. Optional: send response via bus
 	if opts.SendResponse {
 		al.bus.PublishOutbound(bus.OutboundMessage{
 			Channel: opts.Channel,
@@ -482,7 +582,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		})
 	}
 
-	// 9. Log response
+	// 10. Log response
 	responsePreview := utils.Truncate(finalContent, 120)
 	logger.InfoCF("agent", fmt.Sprintf("Response: %s", responsePreview),
 		map[string]interface{}{
@@ -502,6 +602,9 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 
 	for iteration < al.maxIterations {
 		iteration++
+
+		// Check for injected messages at each iteration boundary
+		messages = al.drainInterrupts(messages, opts.SessionKey)
 
 		logger.DebugCF("agent", "LLM iteration",
 			map[string]interface{}{
@@ -580,6 +683,27 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		// Check if no tool calls - we're done
 		if len(response.ToolCalls) == 0 {
 			finalContent = response.Content
+
+			// Edge case: LLM gave a final answer, but a new user message arrived.
+			// Save the assistant answer, inject the new message, and continue the loop.
+			messages = append(messages, providers.Message{Role: "assistant", Content: finalContent})
+			al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
+			injected := al.drainInterrupts(messages, opts.SessionKey)
+			if len(injected) > len(messages) {
+				// New messages were injected — send current answer and continue
+				al.bus.PublishOutbound(bus.OutboundMessage{
+					Channel: opts.Channel,
+					ChatID:  opts.ChatID,
+					Content: finalContent,
+				})
+				messages = injected
+				finalContent = ""
+				continue
+			}
+			// No interrupts — remove the assistant message we just appended
+			// (it will be saved by the caller in runAgentLoop step 6)
+			messages = messages[:len(messages)-1]
+
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 				map[string]interface{}{
 					"iteration":     iteration,
@@ -633,12 +757,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				})
 
 			// Create async callback for tools that implement AsyncTool
-			// NOTE: Following openclaw's design, async tools do NOT send results directly to users.
-			// Instead, they notify the agent via PublishInbound, and the agent decides
-			// whether to forward the result to the user (in processSystemMessage).
 			asyncCallback := func(callbackCtx context.Context, result *tools.ToolResult) {
-				// Log the async completion but don't send directly to user
-				// The agent will handle user notification via processSystemMessage
 				if !result.Silent && result.ForUser != "" {
 					logger.InfoCF("agent", "Async tool completed, agent will handle notification",
 						map[string]interface{}{
@@ -683,6 +802,45 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 	}
 
 	return finalContent, iteration, nil
+}
+
+// drainInterrupts non-blocking reads all pending messages from interruptCh
+// and appends them as user messages to the conversation. Returns the updated
+// messages slice (unchanged if no interrupts).
+func (al *AgentLoop) drainInterrupts(messages []providers.Message, sessionKey string) []providers.Message {
+	if al.interruptCh == nil {
+		return messages
+	}
+
+	injected := false
+	for {
+		select {
+		case msg := <-al.interruptCh:
+			userMsg := providers.Message{
+				Role:    "user",
+				Content: msg.Content,
+			}
+			if len(msg.Media) > 0 {
+				userMsg.ContentParts = msg.Media
+			}
+			messages = append(messages, userMsg)
+			al.sessions.AddMessage(sessionKey, "user", msg.Content)
+			injected = true
+			logger.InfoCF("agent", "Injected interrupt message into conversation",
+				map[string]interface{}{
+					"session_key": sessionKey,
+					"preview":     utils.Truncate(msg.Content, 60),
+				})
+		default:
+			if injected {
+				logger.InfoCF("agent", "Interrupt injection complete",
+					map[string]interface{}{
+						"total_messages": len(messages),
+					})
+			}
+			return messages
+		}
+	}
 }
 
 // updateToolContexts updates the context for tools that need channel/chatID info.
@@ -895,4 +1053,35 @@ func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
 		total += utf8.RuneCountInString(m.Content) / 3
 	}
 	return total
+}
+
+// resolveEmbeddingFunc returns an OpenAI embedding function if an API key is available.
+// Tries OpenAI key first, then OpenRouter as OpenAI-compatible fallback.
+// Returns nil if no key is available.
+func resolveEmbeddingFunc(cfg *config.Config) chromem.EmbeddingFunc {
+	model := cfg.Tools.Memory.EmbeddingModel
+	if model == "" {
+		model = "text-embedding-3-small"
+	}
+
+	// Try direct OpenAI key
+	if cfg.Providers.OpenAI.APIKey != "" {
+		return chromem.NewEmbeddingFuncOpenAI(cfg.Providers.OpenAI.APIKey, chromem.EmbeddingModelOpenAI(model))
+	}
+
+	// Try OpenRouter as OpenAI-compatible endpoint
+	// OpenRouter requires "openai/" prefix for OpenAI embedding models
+	if cfg.Providers.OpenRouter.APIKey != "" {
+		baseURL := cfg.Providers.OpenRouter.APIBase
+		if baseURL == "" {
+			baseURL = "https://openrouter.ai/api/v1"
+		}
+		orModel := model
+		if !strings.Contains(orModel, "/") {
+			orModel = "openai/" + orModel
+		}
+		return chromem.NewEmbeddingFuncOpenAICompat(baseURL, cfg.Providers.OpenRouter.APIKey, orModel, nil)
+	}
+
+	return nil
 }
