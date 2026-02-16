@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	chromem "github.com/philippgille/chromem-go"
 	"github.com/chzyer/readline"
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/auth"
@@ -30,6 +31,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/devices"
 	"github.com/sipeed/picoclaw/pkg/heartbeat"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/migrate"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -140,6 +142,8 @@ func main() {
 		authCmd()
 	case "cron":
 		cronCmd()
+	case "memory":
+		memoryCmd()
 	case "skills":
 		if len(os.Args) < 3 {
 			skillsHelp()
@@ -209,6 +213,7 @@ func printHelp() {
 	fmt.Println("  gateway     Start picoclaw gateway")
 	fmt.Println("  status      Show picoclaw status")
 	fmt.Println("  cron        Manage scheduled tasks")
+	fmt.Println("  memory      Manage semantic memory (backfill)")
 	fmt.Println("  migrate     Migrate from OpenClaw to PicoClaw")
 	fmt.Println("  skills      Manage skills (install, list, remove)")
 	fmt.Println("  version     Show version information")
@@ -1471,4 +1476,151 @@ func skillsShowCmd(loader *skills.SkillsLoader, skillName string) {
 	fmt.Printf("\n📦 Skill: %s\n", skillName)
 	fmt.Println("----------------------")
 	fmt.Println(content)
+}
+
+func memoryCmd() {
+	if len(os.Args) < 3 {
+		memoryHelp()
+		return
+	}
+
+	switch os.Args[2] {
+	case "backfill":
+		memoryBackfillCmd()
+	default:
+		fmt.Printf("Unknown memory command: %s\n", os.Args[2])
+		memoryHelp()
+	}
+}
+
+func memoryHelp() {
+	fmt.Println("\nMemory commands:")
+	fmt.Println("  backfill    Index all existing sessions into semantic memory")
+	fmt.Println()
+	fmt.Println("Backfill options:")
+	fmt.Println("  --extract     Also run knowledge extraction (slow, uses LLM calls)")
+	fmt.Println("  --dry-run     Show what would be done without making changes")
+	fmt.Println("  --debug       Enable debug logging")
+}
+
+func memoryBackfillCmd() {
+	extract := false
+	dryRun := false
+
+	args := os.Args[3:]
+	for _, arg := range args {
+		switch arg {
+		case "--extract":
+			extract = true
+		case "--dry-run":
+			dryRun = true
+		case "--debug", "-d":
+			logger.SetLevel(logger.DEBUG)
+		}
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	workspace := cfg.WorkspacePath()
+	sessionsDir := filepath.Join(workspace, "sessions")
+
+	if _, err := os.Stat(sessionsDir); err != nil {
+		fmt.Printf("Sessions directory not found: %s\n", sessionsDir)
+		os.Exit(1)
+	}
+
+	// Resolve embedding function
+	embeddingFn := resolveBackfillEmbeddingFunc(cfg)
+	if embeddingFn == nil {
+		fmt.Println("Error: No embedding API key available (need OpenAI or OpenRouter key)")
+		os.Exit(1)
+	}
+
+	// Initialize vector store
+	store, err := memory.NewVectorStore(workspace, embeddingFn)
+	if err != nil {
+		fmt.Printf("Error initializing vector store: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize knowledge extractor if requested
+	var extractor *memory.KnowledgeExtractor
+	if extract {
+		provider, err := providers.CreateProviderWithFallback(cfg)
+		if err != nil {
+			fmt.Printf("Error creating LLM provider for extraction: %v\n", err)
+			os.Exit(1)
+		}
+		extractor = memory.NewKnowledgeExtractor(provider, cfg.Agents.Defaults.Model, store)
+		fmt.Println("Knowledge extraction enabled (this will be slow and use LLM API calls)")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle Ctrl+C gracefully
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt)
+		<-sigChan
+		fmt.Println("\nInterrupted — stopping backfill...")
+		cancel()
+	}()
+
+	fmt.Printf("Starting backfill from %s\n", sessionsDir)
+	if dryRun {
+		fmt.Println("(dry run — no changes will be made)")
+	}
+	fmt.Println()
+
+	stats, err := memory.Backfill(ctx, sessionsDir, store, extractor, memory.BackfillOptions{
+		ExtractKnowledge: extract,
+		DryRun:           dryRun,
+	})
+	if err != nil && ctx.Err() == nil {
+		fmt.Printf("\nBackfill error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	fmt.Printf("Backfill complete:\n")
+	fmt.Printf("  Sessions processed: %d/%d\n", stats.SessionsProcessed, stats.SessionsTotal)
+	fmt.Printf("  Conversation turns indexed: %d\n", stats.TurnsIndexed)
+	if extract {
+		fmt.Printf("  Knowledge facts extracted: %d\n", stats.FactsExtracted)
+	}
+	if stats.Errors > 0 {
+		fmt.Printf("  Errors: %d\n", stats.Errors)
+	}
+}
+
+// resolveBackfillEmbeddingFunc resolves an embedding function from config.
+// Same logic as agent.resolveEmbeddingFunc but standalone for the CLI command.
+func resolveBackfillEmbeddingFunc(cfg *config.Config) chromem.EmbeddingFunc {
+	model := cfg.Tools.Memory.EmbeddingModel
+	if model == "" {
+		model = "text-embedding-3-small"
+	}
+
+	if cfg.Providers.OpenAI.APIKey != "" {
+		return chromem.NewEmbeddingFuncOpenAI(cfg.Providers.OpenAI.APIKey, chromem.EmbeddingModelOpenAI(model))
+	}
+
+	if cfg.Providers.OpenRouter.APIKey != "" {
+		baseURL := cfg.Providers.OpenRouter.APIBase
+		if baseURL == "" {
+			baseURL = "https://openrouter.ai/api/v1"
+		}
+		orModel := model
+		if !strings.Contains(orModel, "/") {
+			orModel = "openai/" + orModel
+		}
+		return chromem.NewEmbeddingFuncOpenAICompat(baseURL, cfg.Providers.OpenRouter.APIKey, orModel, nil)
+	}
+
+	return nil
 }
