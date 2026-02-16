@@ -72,6 +72,10 @@ type AgentLoop struct {
 	vectorStore    *memory.VectorStore
 	extractor      *memory.KnowledgeExtractor
 
+	// Specialist system
+	topicMappings    *state.TopicMappingStore
+	specialistLoader *specialists.SpecialistLoader
+
 	// Message injection: routes new messages to active session or pending queue
 	pendingMu     sync.Mutex
 	pendingMsgs   chan bus.InboundMessage // messages for non-active sessions
@@ -90,6 +94,8 @@ type processOptions struct {
 	EnableSummary   bool                // Whether to trigger summarization
 	SendResponse    bool                // Whether to send response via bus
 	NoHistory       bool                // If true, don't load session history (for heartbeat)
+	Specialist      string              // If set, run as this specialist persona
+	Metadata        map[string]string   // Inbound message metadata (thread_id, etc.)
 }
 
 // createToolRegistry creates a tool registry with common tools.
@@ -164,6 +170,35 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	return registry
 }
 
+// createSpecialistToolRegistry creates a restricted tool registry for specialist subagents.
+// Only read-only tools are included — no exec, write, edit, message, email, moodle, etc.
+func createSpecialistToolRegistry(workspace string, cfg *config.Config, vectorStore *memory.VectorStore) *tools.ToolRegistry {
+	registry := tools.NewToolRegistry()
+
+	// Read-only file tools
+	registry.Register(tools.NewReadFileTool(workspace, true))
+	registry.Register(tools.NewListDirTool(workspace, true))
+
+	// Web tools (read-only)
+	if searchTool := tools.NewWebSearchTool(tools.WebSearchToolOptions{
+		BraveAPIKey:          cfg.Tools.Web.Brave.APIKey,
+		BraveMaxResults:      cfg.Tools.Web.Brave.MaxResults,
+		BraveEnabled:         cfg.Tools.Web.Brave.Enabled,
+		DuckDuckGoMaxResults: cfg.Tools.Web.DuckDuckGo.MaxResults,
+		DuckDuckGoEnabled:    cfg.Tools.Web.DuckDuckGo.Enabled,
+	}); searchTool != nil {
+		registry.Register(searchTool)
+	}
+	registry.Register(tools.NewWebFetchTool(50000))
+
+	// Semantic memory search (read-only)
+	if vectorStore != nil {
+		registry.Register(tools.NewMemorySearchTool(vectorStore))
+	}
+
+	return registry
+}
+
 func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers.LLMProvider) *AgentLoop {
 	workspace := cfg.WorkspacePath()
 	os.MkdirAll(workspace, 0755)
@@ -213,13 +248,14 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	subagentTool := tools.NewSubagentTool(subagentManager)
 	toolsRegistry.Register(subagentTool)
 
-	// Register specialist tools
+	// Register specialist tools (with restricted tool registry)
 	specialistLoader := specialists.NewSpecialistLoader(workspace)
+	specialistTools := createSpecialistToolRegistry(workspace, cfg, vectorStore)
 	consultTool := tools.NewConsultSpecialistTool(tools.ConsultSpecialistConfig{
 		Loader:      specialistLoader,
 		Provider:    provider,
 		Model:       cfg.Agents.Defaults.Model,
-		Tools:       subagentTools,
+		Tools:       specialistTools,
 		VectorStore: vectorStore,
 		Extractor:   extractor,
 		MaxIter:     cfg.Agents.Defaults.MaxToolIterations,
@@ -240,19 +276,21 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	contextBuilder.SetSpecialistLoader(specialistLoader)
 
 	return &AgentLoop{
-		bus:            msgBus,
-		provider:       provider,
-		workspace:      workspace,
-		model:          cfg.Agents.Defaults.Model,
-		contextWindow:  cfg.Agents.Defaults.MaxTokens, // Restore context window for summarization
-		maxIterations:  cfg.Agents.Defaults.MaxToolIterations,
-		sessions:       sessionsManager,
-		state:          stateManager,
-		contextBuilder: contextBuilder,
-		tools:          toolsRegistry,
-		summarizing:    sync.Map{},
-		vectorStore:    vectorStore,
-		extractor:      extractor,
+		bus:              msgBus,
+		provider:         provider,
+		workspace:        workspace,
+		model:            cfg.Agents.Defaults.Model,
+		contextWindow:    cfg.Agents.Defaults.MaxTokens, // Restore context window for summarization
+		maxIterations:    cfg.Agents.Defaults.MaxToolIterations,
+		sessions:         sessionsManager,
+		state:            stateManager,
+		contextBuilder:   contextBuilder,
+		tools:            toolsRegistry,
+		summarizing:      sync.Map{},
+		vectorStore:      vectorStore,
+		extractor:        extractor,
+		topicMappings:    state.NewTopicMappingStore(workspace),
+		specialistLoader: specialistLoader,
 	}
 }
 
@@ -299,9 +337,10 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 				if !alreadySent {
 					al.bus.PublishOutbound(bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: response,
+						Channel:  msg.Channel,
+						ChatID:   msg.ChatID,
+						Content:  response,
+						Metadata: msg.Metadata,
 					})
 				}
 			}
@@ -437,6 +476,17 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return resp, nil
 	}
 
+	// Handle /link command — maps forum topics to specialists
+	if resp, handled := al.handleLinkCommand(msg); handled {
+		return resp, nil
+	}
+
+	// Check if this topic is mapped to a specialist
+	var specialist string
+	if threadID, ok := msg.Metadata["thread_id"]; ok && threadID != "" {
+		specialist = al.topicMappings.LookupSpecialist(msg.ChatID, threadID)
+	}
+
 	// Process as user message
 	return al.runAgentLoop(ctx, processOptions{
 		SessionKey:      msg.SessionKey,
@@ -447,6 +497,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		DefaultResponse: "I've completed processing but have no response to give.",
 		EnableSummary:   true,
 		SendResponse:    false,
+		Specialist:      specialist,
+		Metadata:        msg.Metadata,
 	})
 }
 
@@ -524,6 +576,55 @@ func (al *AgentLoop) handleModelCommand(content string) (string, bool) {
 	return fmt.Sprintf("Model switched: `%s` -> `%s`", oldModel, newModel), true
 }
 
+// handleLinkCommand handles /link commands for topic-specialist mapping.
+// /link           — show current topic's specialist mapping
+// /link <name>    — link this topic to a specialist
+// /link none      — unlink this topic
+func (al *AgentLoop) handleLinkCommand(msg bus.InboundMessage) (string, bool) {
+	trimmed := strings.TrimSpace(msg.Content)
+	if !strings.HasPrefix(trimmed, "/link") {
+		return "", false
+	}
+
+	threadID, ok := msg.Metadata["thread_id"]
+	if !ok || threadID == "" {
+		return "The /link command must be used from within a forum topic.", true
+	}
+
+	parts := strings.Fields(trimmed)
+	if len(parts) == 1 {
+		// Show current mapping
+		current := al.topicMappings.LookupSpecialist(msg.ChatID, threadID)
+		if current == "" {
+			return "This topic is not linked to any specialist.", true
+		}
+		return fmt.Sprintf("This topic is linked to specialist: `%s`", current), true
+	}
+
+	name := parts[1]
+	if name == "none" || name == "unlink" {
+		if err := al.topicMappings.RemoveMapping(msg.ChatID, threadID); err != nil {
+			return fmt.Sprintf("Failed to unlink topic: %v", err), true
+		}
+		return "Topic unlinked from specialist.", true
+	}
+
+	// Verify specialist exists
+	if !al.specialistLoader.Exists(name) {
+		available := al.specialistLoader.ListSpecialists()
+		var names []string
+		for _, s := range available {
+			names = append(names, s.Name)
+		}
+		return fmt.Sprintf("Specialist `%s` not found. Available: %s", name, strings.Join(names, ", ")), true
+	}
+
+	if err := al.topicMappings.SetMapping(msg.ChatID, threadID, name); err != nil {
+		return fmt.Sprintf("Failed to link topic: %v", err), true
+	}
+	return fmt.Sprintf("Topic linked to specialist: `%s`", name), true
+}
+
 // SetModel changes the active model at runtime.
 func (al *AgentLoop) SetModel(model string) {
 	al.model = model
@@ -564,20 +665,34 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		history = al.sessions.GetHistory(opts.SessionKey)
 		summary = al.sessions.GetSummary(opts.SessionKey)
 	}
-	messages := al.contextBuilder.BuildMessages(
-		history,
-		summary,
-		opts.UserMessage,
-		opts.Media,
-		opts.Channel,
-		opts.ChatID,
-	)
+
+	var messages []providers.Message
+	if opts.Specialist != "" {
+		messages = al.contextBuilder.BuildSpecialistMessages(
+			history,
+			summary,
+			opts.UserMessage,
+			opts.Media,
+			opts.Channel,
+			opts.ChatID,
+			opts.Specialist,
+		)
+	} else {
+		messages = al.contextBuilder.BuildMessages(
+			history,
+			summary,
+			opts.UserMessage,
+			opts.Media,
+			opts.Channel,
+			opts.ChatID,
+		)
+	}
 
 	// 3. Save user message to session
 	al.sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 
 	// 4. Run LLM iteration loop
-	finalContent, iteration, err := al.runLLMIteration(ctx, messages, opts)
+	finalContent, iteration, usedSpecialist, err := al.runLLMIteration(ctx, messages, opts)
 	if err != nil {
 		return "", err
 	}
@@ -597,8 +712,20 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 	// 7. Async: index conversation and extract knowledge
 	if al.vectorStore != nil && !opts.NoHistory {
 		go al.vectorStore.IndexConversation(context.Background(), opts.SessionKey, opts.Channel, opts.ChatID, opts.UserMessage, finalContent)
-		if al.extractor != nil {
+		// Skip global extraction when specialist already handled scoped extraction,
+		// or when running in specialist mode (topic-linked).
+		if al.extractor != nil && !usedSpecialist && opts.Specialist == "" {
 			go al.extractor.ExtractAndConsolidate(context.Background(), opts.UserMessage, finalContent, opts.SessionKey, "", memory.KnowledgeIndexOpts{})
+		} else if al.extractor != nil && opts.Specialist != "" {
+			// Specialist mode: extract with specialist scope
+			go func() {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				al.extractor.ExtractAndConsolidateSpecialist(bgCtx, finalContent, opts.UserMessage, opts.SessionKey, opts.Specialist, memory.KnowledgeIndexOpts{
+					Specialist: opts.Specialist,
+					SourceType: "conversation",
+				})
+			}()
 		}
 	}
 
@@ -610,9 +737,10 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 	// 9. Optional: send response via bus
 	if opts.SendResponse {
 		al.bus.PublishOutbound(bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: finalContent,
+			Channel:  opts.Channel,
+			ChatID:   opts.ChatID,
+			Content:  finalContent,
+			Metadata: opts.Metadata,
 		})
 	}
 
@@ -629,10 +757,11 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 }
 
 // runLLMIteration executes the LLM call loop with tool handling.
-// Returns the final content, iteration count, and any error.
-func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.Message, opts processOptions) (string, int, error) {
+// Returns the final content, iteration count, whether consult_specialist was used, and any error.
+func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.Message, opts processOptions) (string, int, bool, error) {
 	iteration := 0
 	var finalContent string
+	usedSpecialist := false
 
 	for iteration < al.maxIterations {
 		iteration++
@@ -708,7 +837,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 					"iteration": iteration,
 					"error":     err.Error(),
 				})
-			return "", iteration, fmt.Errorf("LLM call failed: %w", err)
+			return "", iteration, usedSpecialist, fmt.Errorf("LLM call failed: %w", err)
 		}
 
 		// Strip <think>...</think> reasoning blocks (e.g. MiniMax, DeepSeek)
@@ -726,9 +855,10 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				// New messages were injected — save and send current answer, then continue
 				al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
 				al.bus.PublishOutbound(bus.OutboundMessage{
-					Channel: opts.Channel,
-					ChatID:  opts.ChatID,
-					Content: finalContent,
+					Channel:  opts.Channel,
+					ChatID:   opts.ChatID,
+					Content:  finalContent,
+					Metadata: opts.Metadata,
 				})
 				messages = injected
 				finalContent = ""
@@ -781,6 +911,11 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 
 		// Execute tool calls
 		for _, tc := range response.ToolCalls {
+			// Track consult_specialist usage to skip double extraction
+			if tc.Name == "consult_specialist" {
+				usedSpecialist = true
+			}
+
 			// Log tool call with arguments preview
 			argsJSON, _ := json.Marshal(tc.Arguments)
 			argsPreview := utils.Truncate(string(argsJSON), 200)
@@ -835,7 +970,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		}
 	}
 
-	return finalContent, iteration, nil
+	return finalContent, iteration, usedSpecialist, nil
 }
 
 // drainInterrupts non-blocking reads all pending messages from interruptCh

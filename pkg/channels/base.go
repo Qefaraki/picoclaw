@@ -93,8 +93,11 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, mediaParts
 		return
 	}
 
-	// Build session key: channel:chatID
+	// Build session key: channel:chatID (with optional topic suffix)
 	sessionKey := fmt.Sprintf("%s:%s", c.name, chatID)
+	if threadID, ok := metadata["thread_id"]; ok && threadID != "" {
+		sessionKey = fmt.Sprintf("%s:topic:%s", sessionKey, threadID)
+	}
 
 	msg := bus.InboundMessage{
 		Channel:    c.name,

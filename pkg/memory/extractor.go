@@ -267,6 +267,99 @@ func (ke *KnowledgeExtractor) decideAction(ctx context.Context, fact ExtractedFa
 	return &action, nil
 }
 
+const specialistExtractionPrompt = `Extract key facts and information from the following content. Preserve:
+- Names, dates, amounts, locations, deadlines
+- Agreements, decisions, commitments
+- Relationships between people and entities
+- Key details (prices, quantities, schedules, contact info)
+
+Each fact should be self-contained and preserve WHO said/did it and WHEN.
+Categories: financial, operational, logistic, contractual, relationship, decision, contact, contextual
+
+Return a JSON array of facts. If no meaningful facts can be extracted, return an empty array [].
+
+Example output:
+[
+  {"fact": "Charlie confirmed the venue booking for June 15th at The Grand Hall", "category": "logistic"},
+  {"fact": "Budget approved at $5,000 for catering by Sarah on 2024-03-01", "category": "financial"}
+]
+
+CONTENT:
+%s
+
+Return ONLY valid JSON, no markdown fences or explanation.`
+
+// ExtractSpecialistFacts extracts facts using the specialist-aware prompt
+// (suitable for documents, domain knowledge, and post-consultation extraction).
+func (ke *KnowledgeExtractor) ExtractSpecialistFacts(ctx context.Context, content string) ([]ExtractedFact, error) {
+	if len(content) < 10 {
+		return nil, nil
+	}
+
+	prompt := fmt.Sprintf(specialistExtractionPrompt, content)
+
+	resp, err := ke.provider.Chat(ctx, []providers.Message{
+		{Role: "user", Content: prompt},
+	}, nil, ke.model, map[string]interface{}{
+		"max_tokens":  1024,
+		"temperature": 0.1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("LLM specialist extraction call: %w", err)
+	}
+
+	c := strings.TrimSpace(resp.Content)
+	c = thinkTagRe.ReplaceAllString(c, "")
+	c = strings.TrimPrefix(c, "```json")
+	c = strings.TrimPrefix(c, "```")
+	c = strings.TrimSuffix(c, "```")
+	c = strings.TrimSpace(c)
+
+	var facts []ExtractedFact
+	if err := json.Unmarshal([]byte(c), &facts); err != nil {
+		return nil, fmt.Errorf("parse specialist facts: %w (response: %s)", err, truncate(c, 200))
+	}
+
+	return facts, nil
+}
+
+// ExtractAndConsolidateSpecialist runs the specialist-aware extraction pipeline.
+// Uses the specialist extraction prompt instead of the user-focused one.
+func (ke *KnowledgeExtractor) ExtractAndConsolidateSpecialist(ctx context.Context, content, question, sessionKey, specialist string, opts KnowledgeIndexOpts) {
+	combined := content
+	if question != "" {
+		combined = fmt.Sprintf("Question: %s\n\nResponse: %s", question, content)
+	}
+
+	facts, err := ke.ExtractSpecialistFacts(ctx, combined)
+	if err != nil {
+		logger.WarnCF("memory", "Specialist knowledge extraction failed", map[string]interface{}{
+			"error":       err.Error(),
+			"session_key": sessionKey,
+			"specialist":  specialist,
+		})
+		return
+	}
+
+	if len(facts) == 0 {
+		return
+	}
+
+	logger.InfoCF("memory", "Extracted specialist facts", map[string]interface{}{
+		"count":      len(facts),
+		"specialist": specialist,
+	})
+
+	for _, fact := range facts {
+		if err := ke.consolidateFact(ctx, fact, specialist, opts); err != nil {
+			logger.WarnCF("memory", "Failed to consolidate specialist fact", map[string]interface{}{
+				"error": err.Error(),
+				"fact":  fact.Fact,
+			})
+		}
+	}
+}
+
 func truncate(s string, maxRunes int) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {

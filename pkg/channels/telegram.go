@@ -131,19 +131,30 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 		return fmt.Errorf("invalid chat ID: %w", err)
 	}
 
+	// Parse thread ID from metadata
+	threadID := 0
+	if msg.Metadata != nil {
+		if tid, ok := msg.Metadata["thread_id"]; ok && tid != "" {
+			fmt.Sscanf(tid, "%d", &threadID)
+		}
+	}
+
+	// Composite key for placeholder/thinking lookup
+	key := compositeKey(chatID, threadID)
+
 	// Stop thinking animation
-	if stop, ok := c.stopThinking.Load(msg.ChatID); ok {
+	if stop, ok := c.stopThinking.Load(key); ok {
 		if cf, ok := stop.(*thinkingCancel); ok && cf != nil {
 			cf.Cancel()
 		}
-		c.stopThinking.Delete(msg.ChatID)
+		c.stopThinking.Delete(key)
 	}
 
 	htmlContent := markdownToTelegramHTML(msg.Content)
 
 	// Try to edit placeholder
-	if pID, ok := c.placeholders.Load(msg.ChatID); ok {
-		c.placeholders.Delete(msg.ChatID)
+	if pID, ok := c.placeholders.Load(key); ok {
+		c.placeholders.Delete(key)
 		editMsg := tu.EditMessageText(tu.ID(chatID), pID.(int), htmlContent)
 		editMsg.ParseMode = telego.ModeHTML
 
@@ -155,6 +166,9 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 
 	tgMsg := tu.Message(tu.ID(chatID), htmlContent)
 	tgMsg.ParseMode = telego.ModeHTML
+	if threadID != 0 {
+		tgMsg.MessageThreadID = threadID
+	}
 
 	if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
 		logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]interface{}{
@@ -169,13 +183,28 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 }
 
 func (c *TelegramChannel) StreamUpdate(ctx context.Context, chatID string, partialContent string) {
-	pID, ok := c.placeholders.Load(chatID)
-	if !ok {
+	// Try composite keys with all stored placeholders matching this chatID prefix
+	numChatID, err := parseChatID(chatID)
+	if err != nil {
 		return
 	}
 
-	numChatID, err := parseChatID(chatID)
-	if err != nil {
+	// Try exact match first (backward compatible), then composite keys
+	pID, ok := c.placeholders.Load(chatID)
+	if !ok {
+		// Try finding a composite key that starts with this chatID
+		c.placeholders.Range(func(key, value interface{}) bool {
+			k, _ := key.(string)
+			if strings.HasPrefix(k, chatID+":") || k == chatID {
+				pID = value
+				ok = true
+				return false
+			}
+			return true
+		})
+	}
+
+	if !ok {
 		return
 	}
 
@@ -337,6 +366,15 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		"preview":   utils.Truncate(content, 50),
 	})
 
+	// Detect forum topic
+	threadID := 0
+	if message.MessageThreadID != 0 {
+		threadID = message.MessageThreadID
+	}
+
+	// Composite key for placeholder/thinking maps (prevents collisions between topics)
+	compositeKey := compositeKey(chatID, threadID)
+
 	// Thinking indicator
 	err := c.bot.SendChatAction(ctx, tu.ChatAction(tu.ID(chatID), telego.ChatActionTyping))
 	if err != nil {
@@ -346,15 +384,14 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 	}
 
 	// Stop any previous thinking animation
-	chatIDStr := fmt.Sprintf("%d", chatID)
-	if prevStop, ok := c.stopThinking.Load(chatIDStr); ok {
+	if prevStop, ok := c.stopThinking.Load(compositeKey); ok {
 		if cf, ok := prevStop.(*thinkingCancel); ok && cf != nil {
 			cf.Cancel()
 		}
 	}
 
 	// Delete old placeholder if one exists (follow-up message while processing)
-	if oldPID, ok := c.placeholders.LoadAndDelete(chatIDStr); ok {
+	if oldPID, ok := c.placeholders.LoadAndDelete(compositeKey); ok {
 		_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
 			ChatID:    tu.ID(chatID),
 			MessageID: oldPID.(int),
@@ -363,12 +400,17 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 
 	// Create cancel function for thinking state
 	_, thinkCancel := context.WithCancel(ctx)
-	c.stopThinking.Store(chatIDStr, &thinkingCancel{fn: thinkCancel})
+	c.stopThinking.Store(compositeKey, &thinkingCancel{fn: thinkCancel})
 
-	pMsg, err := c.bot.SendMessage(ctx, tu.Message(tu.ID(chatID), "Thinking... 💭"))
+	// Send "Thinking..." to the correct topic
+	thinkMsg := tu.Message(tu.ID(chatID), "Thinking... 💭")
+	if threadID != 0 {
+		thinkMsg.MessageThreadID = threadID
+	}
+	pMsg, err := c.bot.SendMessage(ctx, thinkMsg)
 	if err == nil {
 		pID := pMsg.MessageID
-		c.placeholders.Store(chatIDStr, pID)
+		c.placeholders.Store(compositeKey, pID)
 	}
 
 	metadata := map[string]string{
@@ -377,6 +419,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		"username":   user.Username,
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
+	}
+	if threadID != 0 {
+		metadata["thread_id"] = fmt.Sprintf("%d", threadID)
+		metadata["is_forum_topic"] = "true"
 	}
 
 	c.HandleMessage(senderID, fmt.Sprintf("%d", chatID), content, mediaParts, metadata)
@@ -533,4 +579,12 @@ func escapeHTML(text string) string {
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")
 	return text
+}
+
+// compositeKey builds a unique key from chatID and threadID for placeholder/thinking maps.
+func compositeKey(chatID int64, threadID int) string {
+	if threadID == 0 {
+		return fmt.Sprintf("%d", chatID)
+	}
+	return fmt.Sprintf("%d:%d", chatID, threadID)
 }

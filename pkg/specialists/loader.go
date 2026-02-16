@@ -148,7 +148,7 @@ func (sl *SpecialistLoader) getMetadata(path string) *SpecialistInfo {
 	}
 }
 
-var frontmatterRe = regexp.MustCompile(`(?s)^---\n(.*)\n---`)
+var frontmatterRe = regexp.MustCompile(`(?s)^---\n(.*?)\n---`)
 var frontmatterStripRe = regexp.MustCompile(`(?s)^---\n.*?\n---\n`)
 
 func extractFrontmatter(content string) string {

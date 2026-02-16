@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memory"
@@ -173,16 +174,20 @@ func (t *ConsultSpecialistTool) Execute(ctx context.Context, args map[string]int
 
 	// Async: extract knowledge from the consultation into specialist-scoped memory
 	if t.extractor != nil {
-		go t.extractor.ExtractAndConsolidate(
-			context.Background(),
-			question, result,
-			fmt.Sprintf("specialist:%s", specialistName),
-			specialistName,
-			memory.KnowledgeIndexOpts{
-				Specialist: specialistName,
-				SourceType: "conversation",
-			},
-		)
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			t.extractor.ExtractAndConsolidateSpecialist(
+				bgCtx,
+				result, question,
+				fmt.Sprintf("specialist:%s", specialistName),
+				specialistName,
+				memory.KnowledgeIndexOpts{
+					Specialist: specialistName,
+					SourceType: "conversation",
+				},
+			)
+		}()
 	}
 
 	return SilentResult(fmt.Sprintf("Specialist '%s' response (iterations: %d):\n\n%s", specialistName, loopResult.Iterations, result))
@@ -325,10 +330,11 @@ Return ONLY the file content, no explanation.`, name, description, name, descrip
 	}
 
 	// Seed initial knowledge if provided
-	if initialKnowledge != "" && t.extractor != nil {
+	if initialKnowledge != "" && t.extractor != nil && t.store != nil {
 		go func() {
-			bgCtx := context.Background()
-			facts, err := t.extractor.ExtractFacts(bgCtx, initialKnowledge)
+			bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			facts, err := t.extractor.ExtractSpecialistFacts(bgCtx, initialKnowledge)
 			if err != nil {
 				logger.WarnCF("specialist", "Failed to extract initial knowledge", map[string]interface{}{
 					"error":      err.Error(),
@@ -456,54 +462,49 @@ func (t *FeedSpecialistTool) Execute(ctx context.Context, args map[string]interf
 
 	// Chunk large content with overlapping windows
 	chunks := chunkContent(content, 1500, 200)
+	numChunks := len(chunks)
 
-	totalFacts := 0
-	var topics []string
+	// Run extraction asynchronously with timeout
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 
-	for _, chunk := range chunks {
-		facts, err := t.extractor.ExtractFacts(ctx, chunk)
-		if err != nil {
-			logger.WarnCF("specialist", "Failed to extract facts from chunk", map[string]interface{}{
-				"error":      err.Error(),
-				"specialist": specialistName,
-			})
-			continue
-		}
-
-		for _, fact := range facts {
-			cat := fact.Category
-			if cat == "" {
-				cat = category
-			}
-			if err := t.store.IndexKnowledgeWithOpts(ctx, "", fact.Fact, cat, opts); err != nil {
-				logger.WarnCF("specialist", "Failed to index fact", map[string]interface{}{
-					"error": err.Error(),
-					"fact":  fact.Fact,
+		totalFacts := 0
+		for _, chunk := range chunks {
+			facts, err := t.extractor.ExtractSpecialistFacts(bgCtx, chunk)
+			if err != nil {
+				logger.WarnCF("specialist", "Failed to extract facts from chunk", map[string]interface{}{
+					"error":      err.Error(),
+					"specialist": specialistName,
 				})
 				continue
 			}
-			totalFacts++
 
-			// Collect unique categories as topics
-			found := false
-			for _, t := range topics {
-				if t == cat {
-					found = true
-					break
+			for _, fact := range facts {
+				cat := fact.Category
+				if cat == "" {
+					cat = category
 				}
-			}
-			if !found {
-				topics = append(topics, cat)
+				if err := t.store.IndexKnowledgeWithOpts(bgCtx, "", fact.Fact, cat, opts); err != nil {
+					logger.WarnCF("specialist", "Failed to index fact", map[string]interface{}{
+						"error": err.Error(),
+						"fact":  fact.Fact,
+					})
+					continue
+				}
+				totalFacts++
 			}
 		}
-	}
+		logger.InfoCF("specialist", "Feed completed", map[string]interface{}{
+			"specialist": specialistName,
+			"facts":      totalFacts,
+			"chunks":     numChunks,
+		})
+	}()
 
-	summary := fmt.Sprintf("Fed %d facts to specialist '%s' from %d chunk(s).", totalFacts, specialistName, len(chunks))
+	summary := fmt.Sprintf("Processing %d chunk(s) for specialist '%s', knowledge will be available shortly.", numChunks, specialistName)
 	if sourceName != "" {
 		summary += fmt.Sprintf(" Source: %s.", sourceName)
-	}
-	if len(topics) > 0 {
-		summary += fmt.Sprintf(" Topics: %s.", strings.Join(topics, ", "))
 	}
 
 	return SilentResult(summary)

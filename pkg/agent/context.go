@@ -252,6 +252,74 @@ func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary str
 	return messages
 }
 
+// BuildSpecialistMessages builds a message list using a specialist's persona as the system prompt.
+func (cb *ContextBuilder) BuildSpecialistMessages(history []providers.Message, summary string, currentMessage string, mediaParts []media.ContentPart, channel, chatID, specialistName string) []providers.Message {
+	// Try to load specialist persona
+	var persona string
+	if cb.specialistLoader != nil {
+		p, ok := cb.specialistLoader.LoadSpecialist(specialistName)
+		if ok {
+			persona = p
+		}
+	}
+
+	if persona == "" {
+		// Fallback to normal messages if specialist not found
+		logger.WarnCF("agent", "Specialist not found, falling back to normal mode",
+			map[string]interface{}{
+				"specialist": specialistName,
+			})
+		return cb.BuildMessages(history, summary, currentMessage, mediaParts, channel, chatID)
+	}
+
+	// Build specialist system prompt
+	now := time.Now().Format("2006-01-02 15:04 (Monday)")
+	toolsSection := cb.buildToolsSection()
+
+	systemPrompt := persona + "\n\n## Current Time\n" + now
+
+	if toolsSection != "" {
+		systemPrompt += "\n\n" + toolsSection
+	}
+
+	// Load USER.md for user context
+	userMD := filepath.Join(cb.workspace, "USER.md")
+	if data, err := os.ReadFile(userMD); err == nil {
+		systemPrompt += "\n\n## User Profile\n\n" + string(data)
+	}
+
+	systemPrompt += "\n\n## Instructions\n\nWhen answering, cite your sources (who said it, when, where) so the user can verify. Be thorough and draw on all relevant knowledge available to you."
+
+	if channel != "" && chatID != "" {
+		systemPrompt += fmt.Sprintf("\n\n## Current Session\nChannel: %s\nChat ID: %s\nSpecialist: %s", channel, chatID, specialistName)
+	}
+
+	if summary != "" {
+		systemPrompt += "\n\n## Summary of Previous Conversation\n\n" + summary
+	}
+
+	// Strip orphaned tool messages from history
+	for len(history) > 0 && history[0].Role == "tool" {
+		history = history[1:]
+	}
+
+	messages := []providers.Message{
+		{Role: "system", Content: systemPrompt},
+	}
+	messages = append(messages, history...)
+
+	userMsg := providers.Message{
+		Role:    "user",
+		Content: currentMessage,
+	}
+	if len(mediaParts) > 0 {
+		userMsg.ContentParts = mediaParts
+	}
+	messages = append(messages, userMsg)
+
+	return messages
+}
+
 func (cb *ContextBuilder) AddToolResult(messages []providers.Message, toolCallID, toolName, result string) []providers.Message {
 	messages = append(messages, providers.Message{
 		Role:       "tool",
