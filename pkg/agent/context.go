@@ -272,23 +272,15 @@ func (cb *ContextBuilder) BuildSpecialistMessages(history []providers.Message, s
 		return cb.BuildMessages(history, summary, currentMessage, mediaParts, channel, chatID)
 	}
 
-	// Build specialist system prompt
+	// Build specialist system prompt — minimal, persona-focused
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
-	toolsSection := cb.buildToolsSection()
 
 	systemPrompt := persona + "\n\n## Current Time\n" + now
 
-	if toolsSection != "" {
-		systemPrompt += "\n\n" + toolsSection
-	}
+	// Only include search_memory tool hint (specialists can search their scoped knowledge)
+	systemPrompt += "\n\n## Tools\nYou have a `search_memory` tool to search your knowledge base. Use it proactively when answering questions."
 
-	// Load USER.md for user context
-	userMD := filepath.Join(cb.workspace, "USER.md")
-	if data, err := os.ReadFile(userMD); err == nil {
-		systemPrompt += "\n\n## User Profile\n\n" + string(data)
-	}
-
-	systemPrompt += "\n\n## Instructions\n\nWhen answering, cite your sources (who said it, when, where) so the user can verify. Be thorough and draw on all relevant knowledge available to you."
+	systemPrompt += "\n\n## Instructions\n\nYou ARE this specialist. Stay in character. When answering, cite your sources (who said it, when, where) so the user can verify. Be thorough and draw on all relevant knowledge available to you. Do NOT describe yourself as a general AI assistant."
 
 	if channel != "" && chatID != "" {
 		systemPrompt += fmt.Sprintf("\n\n## Current Session\nChannel: %s\nChat ID: %s\nSpecialist: %s", channel, chatID, specialistName)
