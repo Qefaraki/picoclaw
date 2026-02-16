@@ -12,7 +12,7 @@ services:
       - agent
     volumes:
       - ./config/config.json:/root/.picoclaw/config.json:ro
-      - picoclaw-workspace:/root/.picoclaw/workspace
+      - /data/picoclaw/workspace:/root/.picoclaw/workspace
     entrypoint: ["picoclaw", "agent"]
     stdin_open: true
     tty: true
@@ -33,12 +33,9 @@ services:
       - .env
     volumes:
       # Persistent workspace (sessions, memory, logs)
-      - picoclaw-workspace:/root/.picoclaw/workspace
+      - /data/picoclaw/workspace:/root/.picoclaw/workspace
       # Runtime config with secrets (overrides baked-in config)
       - ./config.local.json:/root/.picoclaw/config.json:ro
       # Auth credentials (OAuth tokens — not in git)
       - ./auth.json:/root/.picoclaw/auth.json:ro
     command: ["gateway"]
-
-volumes:
-  picoclaw-workspace:

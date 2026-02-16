@@ -397,6 +397,19 @@ func agentCmd() {
 		os.Exit(1)
 	}
 
+	// Validate workspace SOUL.md to catch misconfigured volume mounts
+	soulPath := filepath.Join(cfg.WorkspacePath(), "SOUL.md")
+	if data, err := os.ReadFile(soulPath); err != nil {
+		fmt.Printf("WARNING: SOUL.md not found at %s\n", soulPath)
+		fmt.Printf("  The workspace may not be mounted correctly.\n")
+		os.Exit(1)
+	} else if strings.Contains(string(data), "I am picoclaw, a lightweight AI assistant powered by AI") {
+		fmt.Printf("WARNING: SOUL.md contains default template content.\n")
+		fmt.Printf("  The workspace volume may not be mounted correctly.\n")
+		fmt.Printf("  Path: %s\n", soulPath)
+		os.Exit(1)
+	}
+
 	provider, err := providers.CreateProviderWithFallback(cfg)
 	if err != nil {
 		fmt.Printf("Error creating provider: %v\n", err)
@@ -529,6 +542,19 @@ func gatewayCmd() {
 	cfg, err := loadConfig()
 	if err != nil {
 		fmt.Printf("Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Validate workspace SOUL.md to catch misconfigured volume mounts
+	soulPath := filepath.Join(cfg.WorkspacePath(), "SOUL.md")
+	if data, err := os.ReadFile(soulPath); err != nil {
+		fmt.Printf("WARNING: SOUL.md not found at %s\n", soulPath)
+		fmt.Printf("  The workspace may not be mounted correctly.\n")
+		os.Exit(1)
+	} else if strings.Contains(string(data), "I am picoclaw, a lightweight AI assistant powered by AI") {
+		fmt.Printf("WARNING: SOUL.md contains default template content.\n")
+		fmt.Printf("  The workspace volume may not be mounted correctly.\n")
+		fmt.Printf("  Path: %s\n", soulPath)
 		os.Exit(1)
 	}
 
