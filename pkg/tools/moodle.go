@@ -7,21 +7,59 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
-// MoodleTool provides access to Moodle (QM+) Web Services API.
+// MoodleTool provides access to Moodle (QM+) Web Services API with auto-refresh.
 type MoodleTool struct {
-	baseURL string
-	token   string
+	baseURL      string
+	token        string
+	m365User     string
+	m365Pass     string
+	scriptPath   string
+	mu           sync.Mutex
+	refreshed    bool // tracks if we already tried refresh this call
+	onTokenRefresh func(newToken string) // callback to persist new token
 }
 
-func NewMoodleTool(baseURL, token string) *MoodleTool {
+type MoodleToolOptions struct {
+	BaseURL      string
+	Token        string
+	M365Username string
+	M365Password string
+	ScriptPath   string // path to moodle_sso_refresh.py
+	OnTokenRefresh func(newToken string)
+}
+
+func NewMoodleTool(opts MoodleToolOptions) *MoodleTool {
+	scriptPath := opts.ScriptPath
+	if scriptPath == "" {
+		// Default locations to search
+		candidates := []string{
+			"/usr/local/lib/picoclaw/scripts/moodle_sso_refresh.py",
+			"scripts/moodle_sso_refresh.py",
+		}
+		for _, p := range candidates {
+			if _, err := exec.LookPath("python3"); err == nil {
+				scriptPath = p
+				break
+			}
+		}
+		if scriptPath == "" {
+			scriptPath = candidates[0]
+		}
+	}
 	return &MoodleTool{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		token:   token,
+		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
+		token:          opts.Token,
+		m365User:       opts.M365Username,
+		m365Pass:       opts.M365Password,
+		scriptPath:     scriptPath,
+		onTokenRefresh: opts.OnTokenRefresh,
 	}
 }
 
@@ -30,7 +68,7 @@ func (t *MoodleTool) Name() string {
 }
 
 func (t *MoodleTool) Description() string {
-	return "Access Moodle (QM+) learning platform. Can list enrolled courses, show upcoming/overdue assignments, view calendar events, and browse course contents."
+	return "Access Moodle (QM+) learning platform. Can list enrolled courses, show upcoming/overdue assignments, view calendar events, and browse course contents. Token auto-refreshes via M365 SSO when expired."
 }
 
 func (t *MoodleTool) Parameters() map[string]interface{} {
@@ -66,6 +104,11 @@ func (t *MoodleTool) Execute(ctx context.Context, args map[string]interface{}) *
 		days = int(d)
 	}
 
+	// Reset refresh flag for each top-level Execute call
+	t.mu.Lock()
+	t.refreshed = false
+	t.mu.Unlock()
+
 	switch action {
 	case "site_info":
 		return t.siteInfo(ctx)
@@ -86,9 +129,73 @@ func (t *MoodleTool) Execute(ctx context.Context, args map[string]interface{}) *
 	}
 }
 
+// -- Token refresh --
+
+func (t *MoodleTool) isTokenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "invalidtoken") ||
+		strings.Contains(msg, "accessexception") ||
+		strings.Contains(msg, "invalidsesskey")
+}
+
+func (t *MoodleTool) tryRefresh() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.refreshed {
+		return fmt.Errorf("already tried refresh this call")
+	}
+	t.refreshed = true
+
+	if t.m365User == "" || t.m365Pass == "" {
+		return fmt.Errorf("no M365 credentials configured for auto-refresh")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "python3", t.scriptPath, t.m365User, t.m365Pass)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("SSO refresh failed: %s", string(exitErr.Stderr))
+		}
+		return fmt.Errorf("SSO refresh failed: %w", err)
+	}
+
+	newToken := strings.TrimSpace(string(out))
+	if newToken == "" {
+		return fmt.Errorf("SSO refresh returned empty token")
+	}
+
+	t.token = newToken
+
+	if t.onTokenRefresh != nil {
+		t.onTokenRefresh(newToken)
+	}
+
+	return nil
+}
+
 // -- Moodle API helpers --
 
 func (t *MoodleTool) call(ctx context.Context, wsfunction string, params url.Values) (json.RawMessage, error) {
+	data, err := t.rawCall(ctx, wsfunction, params)
+	if err != nil && t.isTokenError(err) {
+		// Try auto-refresh
+		if refreshErr := t.tryRefresh(); refreshErr != nil {
+			return nil, fmt.Errorf("%v (auto-refresh also failed: %v)", err, refreshErr)
+		}
+		// Retry with new token
+		return t.rawCall(ctx, wsfunction, params)
+	}
+	return data, err
+}
+
+func (t *MoodleTool) rawCall(ctx context.Context, wsfunction string, params url.Values) (json.RawMessage, error) {
 	params.Set("wstoken", t.token)
 	params.Set("wsfunction", wsfunction)
 	params.Set("moodlewsrestformat", "json")

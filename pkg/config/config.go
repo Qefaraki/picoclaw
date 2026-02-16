@@ -214,9 +214,11 @@ type WebToolsConfig struct {
 }
 
 type MoodleConfig struct {
-	Enabled bool   `json:"enabled" env:"PICOCLAW_TOOLS_MOODLE_ENABLED"`
-	URL     string `json:"url" env:"PICOCLAW_TOOLS_MOODLE_URL"`
-	Token   string `json:"token" env:"PICOCLAW_TOOLS_MOODLE_TOKEN"`
+	Enabled      bool   `json:"enabled" env:"PICOCLAW_TOOLS_MOODLE_ENABLED"`
+	URL          string `json:"url" env:"PICOCLAW_TOOLS_MOODLE_URL"`
+	Token        string `json:"token" env:"PICOCLAW_TOOLS_MOODLE_TOKEN"`
+	M365Username string `json:"m365_username" env:"PICOCLAW_TOOLS_MOODLE_M365_USERNAME"`
+	M365Password string `json:"m365_password" env:"PICOCLAW_TOOLS_MOODLE_M365_PASSWORD"`
 }
 
 type ToolsConfig struct {

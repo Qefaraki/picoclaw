@@ -84,8 +84,17 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	registry.Register(tools.NewWebFetchTool(50000))
 
 	// Moodle (QM+) tool
-	if cfg.Tools.Moodle.Enabled && cfg.Tools.Moodle.Token != "" {
-		registry.Register(tools.NewMoodleTool(cfg.Tools.Moodle.URL, cfg.Tools.Moodle.Token))
+	if cfg.Tools.Moodle.Enabled {
+		registry.Register(tools.NewMoodleTool(tools.MoodleToolOptions{
+			BaseURL:      cfg.Tools.Moodle.URL,
+			Token:        cfg.Tools.Moodle.Token,
+			M365Username: cfg.Tools.Moodle.M365Username,
+			M365Password: cfg.Tools.Moodle.M365Password,
+			OnTokenRefresh: func(newToken string) {
+				cfg.Tools.Moodle.Token = newToken
+				logger.Info("Moodle token refreshed via SSO")
+			},
+		}))
 	}
 
 	// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms

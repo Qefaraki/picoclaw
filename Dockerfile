@@ -20,10 +20,11 @@ RUN make build
 # ============================================================
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates tzdata curl
+RUN apk add --no-cache ca-certificates tzdata curl python3 py3-requests
 
-# Copy binary
+# Copy binary and scripts
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+COPY scripts/ /usr/local/lib/picoclaw/scripts/
 
 # Create picoclaw home directory and bake in config
 RUN /usr/local/bin/picoclaw onboard
