@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,27 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
+
+// thinkTagRe matches <think>...</think> reasoning blocks (including multiline).
+var thinkTagRe = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
+
+func stripThinkingTags(s string) string {
+	return strings.TrimSpace(thinkTagRe.ReplaceAllString(s, ""))
+}
+
+// stripThinkingTagsForStream strips both closed and unclosed <think> blocks.
+// Used during streaming where the closing tag may not have arrived yet.
+func stripThinkingTagsForStream(s string) string {
+	// Strip closed <think>...</think> blocks
+	s = thinkTagRe.ReplaceAllString(s, "")
+	// Strip unclosed <think>... at the end (closing tag hasn't arrived yet)
+	if idx := strings.LastIndex(s, "<think>"); idx != -1 {
+		if !strings.Contains(s[idx:], "</think>") {
+			s = s[:idx]
+		}
+	}
+	return strings.TrimSpace(s)
+}
 
 type AgentLoop struct {
 	bus            *bus.MessageBus
@@ -520,7 +542,14 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		}
 
 		if canStream && streamCb != nil {
-			notifier = bus.NewStreamNotifier(1500*time.Millisecond, streamCb)
+			// Wrap callback to strip <think> blocks before they reach the channel
+			filteredCb := func(fullText string) {
+				cleaned := stripThinkingTagsForStream(fullText)
+				if cleaned != "" {
+					streamCb(cleaned)
+				}
+			}
+			notifier = bus.NewStreamNotifier(1500*time.Millisecond, filteredCb)
 			response, err = sp.ChatStream(ctx, messages, providerToolDefs, al.model, llmOpts, func(delta string) {
 				notifier.Append(delta)
 			})
@@ -537,6 +566,9 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				})
 			return "", iteration, fmt.Errorf("LLM call failed: %w", err)
 		}
+
+		// Strip <think>...</think> reasoning blocks (e.g. MiniMax, DeepSeek)
+		response.Content = stripThinkingTags(response.Content)
 
 		// Check if no tool calls - we're done
 		if len(response.ToolCalls) == 0 {
