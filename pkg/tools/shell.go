@@ -22,20 +22,35 @@ type ExecTool struct {
 }
 
 func NewExecTool(workingDir string, restrict bool) *ExecTool {
-	denyPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
-		regexp.MustCompile(`\bdel\s+/[fq]\b`),
-		regexp.MustCompile(`\brmdir\s+/s\b`),
-		regexp.MustCompile(`\b(format|mkfs|diskpart)\b\s`), // Match disk wiping commands (must be followed by space/args)
-		regexp.MustCompile(`\bdd\s+if=`),
-		regexp.MustCompile(`>\s*/dev/sd[a-z]\b`), // Block writes to disk devices (but allow /dev/null)
-		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
-		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+	var denyPatterns []*regexp.Regexp
+
+	if restrict {
+		// Restricted mode: block dangerous commands
+		denyPatterns = []*regexp.Regexp{
+			regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
+			regexp.MustCompile(`\bdel\s+/[fq]\b`),
+			regexp.MustCompile(`\brmdir\s+/s\b`),
+			regexp.MustCompile(`\b(format|mkfs|diskpart)\b\s`),
+			regexp.MustCompile(`\bdd\s+if=`),
+			regexp.MustCompile(`>\s*/dev/sd[a-z]\b`),
+			regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
+			regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+		}
+	} else {
+		// Unrestricted mode: only block fork bombs
+		denyPatterns = []*regexp.Regexp{
+			regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+		}
+	}
+
+	timeout := 60 * time.Second
+	if !restrict {
+		timeout = 300 * time.Second // 5 minutes for unrestricted VPS operations
 	}
 
 	return &ExecTool{
 		workingDir:          workingDir,
-		timeout:             60 * time.Second,
+		timeout:             timeout,
 		denyPatterns:        denyPatterns,
 		allowPatterns:       nil,
 		restrictToWorkspace: restrict,
@@ -47,6 +62,9 @@ func (t *ExecTool) Name() string {
 }
 
 func (t *ExecTool) Description() string {
+	if !t.restrictToWorkspace {
+		return "Execute any shell command on this VPS and return its output. You have full system access — install packages, manage services, edit configs, deploy software."
+	}
 	return "Execute a shell command and return its output. Use with caution."
 }
 

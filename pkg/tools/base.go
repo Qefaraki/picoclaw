@@ -17,6 +17,13 @@ type ContextualTool interface {
 	SetContext(channel, chatID string)
 }
 
+// MetadataAwareTool is an optional interface that tools can implement
+// to receive inbound message metadata (thread_id, message_id, etc.)
+type MetadataAwareTool interface {
+	Tool
+	SetMetadata(metadata map[string]string)
+}
+
 // AsyncCallback is a function type that async tools use to notify completion.
 // When an async tool finishes its work, it calls this callback with the result.
 //

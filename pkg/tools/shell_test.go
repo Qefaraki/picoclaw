@@ -112,9 +112,9 @@ func TestShellTool_WorkingDir(t *testing.T) {
 	}
 }
 
-// TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands
+// TestShellTool_DangerousCommand verifies safety guard blocks dangerous commands in restricted mode
 func TestShellTool_DangerousCommand(t *testing.T) {
-	tool := NewExecTool("", false)
+	tool := NewExecTool("", true)
 
 	ctx := context.Background()
 	args := map[string]interface{}{

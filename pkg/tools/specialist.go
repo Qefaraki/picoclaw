@@ -13,6 +13,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/memory"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/specialists"
+	"github.com/sipeed/picoclaw/pkg/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -532,4 +533,143 @@ func chunkContent(content string, chunkSize, overlap int) []string {
 	}
 
 	return chunks
+}
+
+// ---------------------------------------------------------------------------
+// LinkTopicTool — link/unlink forum topics to specialists
+// ---------------------------------------------------------------------------
+
+// LinkTopicTool lets the agent manage topic-to-specialist mappings.
+type LinkTopicTool struct {
+	topicMappings    *state.TopicMappingStore
+	specialistLoader *specialists.SpecialistLoader
+	channel          string
+	chatID           string
+	metadata         map[string]string
+}
+
+func NewLinkTopicTool(topicMappings *state.TopicMappingStore, loader *specialists.SpecialistLoader) *LinkTopicTool {
+	return &LinkTopicTool{
+		topicMappings:    topicMappings,
+		specialistLoader: loader,
+	}
+}
+
+func (t *LinkTopicTool) Name() string { return "link_topic" }
+
+func (t *LinkTopicTool) Description() string {
+	desc := "Link or unlink a forum topic to a specialist. When linked, all messages in that topic are handled by the specialist persona."
+	all := t.specialistLoader.ListSpecialists()
+	if len(all) > 0 {
+		var names []string
+		for _, s := range all {
+			names = append(names, s.Name)
+		}
+		desc += " Available specialists: " + strings.Join(names, ", ") + "."
+	}
+	return desc
+}
+
+func (t *LinkTopicTool) Parameters() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"action": map[string]interface{}{
+				"type":        "string",
+				"description": "Action to perform: link, unlink, or status",
+				"enum":        []string{"link", "unlink", "status"},
+			},
+			"specialist": map[string]interface{}{
+				"type":        "string",
+				"description": "Name of the specialist to link (required for 'link' action)",
+			},
+		},
+		"required": []string{"action"},
+	}
+}
+
+func (t *LinkTopicTool) SetContext(channel, chatID string) {
+	t.channel = channel
+	t.chatID = chatID
+}
+
+func (t *LinkTopicTool) SetMetadata(metadata map[string]string) {
+	t.metadata = metadata
+}
+
+func (t *LinkTopicTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
+	action, _ := args["action"].(string)
+	specialist, _ := args["specialist"].(string)
+
+	if action == "" {
+		return ErrorResult("action is required (link, unlink, or status)")
+	}
+
+	// Extract thread_id from metadata
+	threadID := ""
+	if t.metadata != nil {
+		threadID = t.metadata["thread_id"]
+	}
+	if threadID == "" {
+		return ErrorResult("This tool must be used from within a forum topic (no thread_id in metadata).")
+	}
+
+	chatID := t.chatID
+	if chatID == "" {
+		return ErrorResult("No chat context available.")
+	}
+
+	switch action {
+	case "link":
+		if specialist == "" {
+			// List available specialists
+			all := t.specialistLoader.ListSpecialists()
+			if len(all) == 0 {
+				return ErrorResult("No specialists available. Create one first with create_specialist.")
+			}
+			var names []string
+			for _, s := range all {
+				if s.Description != "" {
+					names = append(names, fmt.Sprintf("%s (%s)", s.Name, s.Description))
+				} else {
+					names = append(names, s.Name)
+				}
+			}
+			return ErrorResult("specialist name is required for 'link' action. Available: " + strings.Join(names, ", "))
+		}
+
+		if !t.specialistLoader.Exists(specialist) {
+			all := t.specialistLoader.ListSpecialists()
+			var names []string
+			for _, s := range all {
+				names = append(names, s.Name)
+			}
+			return ErrorResult(fmt.Sprintf("Specialist %q not found. Available: %s", specialist, strings.Join(names, ", ")))
+		}
+
+		if err := t.topicMappings.SetMapping(chatID, threadID, specialist); err != nil {
+			return ErrorResult(fmt.Sprintf("Failed to link topic: %v", err))
+		}
+		return SilentResult(fmt.Sprintf("Topic (thread %s) linked to specialist '%s'. All messages in this topic will now be handled by the '%s' specialist.", threadID, specialist, specialist))
+
+	case "unlink":
+		current := t.topicMappings.LookupSpecialist(chatID, threadID)
+		if current == "" {
+			return SilentResult("This topic is not linked to any specialist.")
+		}
+		if err := t.topicMappings.RemoveMapping(chatID, threadID); err != nil {
+			return ErrorResult(fmt.Sprintf("Failed to unlink topic: %v", err))
+		}
+		return SilentResult(fmt.Sprintf("Topic unlinked from specialist '%s'.", current))
+
+	case "status":
+		current := t.topicMappings.LookupSpecialist(chatID, threadID)
+		if current == "" {
+			return SilentResult("This topic is not linked to any specialist.")
+		}
+		return SilentResult(fmt.Sprintf("This topic is linked to specialist '%s'.", current))
+
+	default:
+		return ErrorResult(fmt.Sprintf("Unknown action %q. Use link, unlink, or status.", action))
+	}
 }

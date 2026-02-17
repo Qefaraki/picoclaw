@@ -76,6 +76,11 @@ func NewTelegramChannel(cfg config.TelegramConfig, bus *bus.MessageBus) (*Telegr
 	}, nil
 }
 
+// GetBot returns the underlying telego.Bot instance for direct API access.
+func (c *TelegramChannel) GetBot() *telego.Bot {
+	return c.bot
+}
+
 func (c *TelegramChannel) SetTranscriber(transcriber *voice.GroqTranscriber) {
 	c.transcriber = transcriber
 }

@@ -629,6 +629,14 @@ func gatewayCmd() {
 		logger.InfoC("voice", "Groq voice transcription enabled")
 	}
 
+	// Wire manage_telegram tool if Telegram channel is available
+	if telegramChannel, ok := channelManager.GetChannel("telegram"); ok {
+		if tc, ok := telegramChannel.(*channels.TelegramChannel); ok {
+			agentLoop.RegisterTool(tools.NewManageTelegramTool(tc.GetBot()))
+			logger.InfoC("telegram", "manage_telegram tool registered")
+		}
+	}
+
 	if transcriber != nil {
 		if telegramChannel, ok := channelManager.GetChannel("telegram"); ok {
 			if tc, ok := telegramChannel.(*channels.TelegramChannel); ok {

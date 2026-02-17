@@ -35,13 +35,15 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 }
 
 func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string]interface{}) *ToolResult {
-	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
+	return r.ExecuteWithContext(ctx, name, args, "", "", nil, nil)
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
 // If the tool implements AsyncTool and a non-nil callback is provided,
 // the callback will be set on the tool before execution.
-func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args map[string]interface{}, channel, chatID string, asyncCallback AsyncCallback) *ToolResult {
+// If the tool implements MetadataAwareTool and metadata is non-nil,
+// SetMetadata will be called before execution.
+func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args map[string]interface{}, channel, chatID string, asyncCallback AsyncCallback, metadata map[string]string) *ToolResult {
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]interface{}{
 			"tool": name,
@@ -69,6 +71,11 @@ func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args
 			map[string]interface{}{
 				"tool": name,
 			})
+	}
+
+	// If tool implements MetadataAwareTool and metadata is provided, set metadata
+	if metaTool, ok := tool.(MetadataAwareTool); ok && metadata != nil {
+		metaTool.SetMetadata(metadata)
 	}
 
 	start := time.Now()

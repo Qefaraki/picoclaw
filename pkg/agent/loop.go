@@ -265,6 +265,10 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	toolsRegistry.Register(tools.NewCreateSpecialistTool(specialistLoader, provider, cfg.Agents.Defaults.Model, workspace, extractor, vectorStore))
 	toolsRegistry.Register(tools.NewFeedSpecialistTool(specialistLoader, vectorStore, extractor))
 
+	// Topic-specialist linking tool
+	topicMappings := state.NewTopicMappingStore(workspace)
+	toolsRegistry.Register(tools.NewLinkTopicTool(topicMappings, specialistLoader))
+
 	sessionsManager := session.NewSessionManager(filepath.Join(workspace, "sessions"))
 
 	// Create state manager for atomic state persistence
@@ -289,7 +293,7 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		summarizing:      sync.Map{},
 		vectorStore:      vectorStore,
 		extractor:        extractor,
-		topicMappings:    state.NewTopicMappingStore(workspace),
+		topicMappings:    topicMappings,
 		specialistLoader: specialistLoader,
 	}
 }
@@ -936,7 +940,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				}
 			}
 
-			toolResult := al.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, opts.Channel, opts.ChatID, asyncCallback)
+			toolResult := al.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, opts.Channel, opts.ChatID, asyncCallback, opts.Metadata)
 
 			// Send ForUser content to user immediately if not Silent
 			if !toolResult.Silent && toolResult.ForUser != "" && opts.SendResponse {
@@ -1027,25 +1031,13 @@ func (al *AgentLoop) drainInterrupts(messages []providers.Message, sessionKey st
 
 // updateToolContexts updates the context for tools that need channel/chatID info.
 func (al *AgentLoop) updateToolContexts(channel, chatID string) {
-	// Use ContextualTool interface instead of type assertions
-	if tool, ok := al.tools.Get("message"); ok {
-		if mt, ok := tool.(tools.ContextualTool); ok {
-			mt.SetContext(channel, chatID)
-		}
-	}
-	if tool, ok := al.tools.Get("spawn"); ok {
-		if st, ok := tool.(tools.ContextualTool); ok {
-			st.SetContext(channel, chatID)
-		}
-	}
-	if tool, ok := al.tools.Get("subagent"); ok {
-		if st, ok := tool.(tools.ContextualTool); ok {
-			st.SetContext(channel, chatID)
-		}
-	}
-	if tool, ok := al.tools.Get("consult_specialist"); ok {
-		if st, ok := tool.(tools.ContextualTool); ok {
-			st.SetContext(channel, chatID)
+	// Set context on all tools that implement ContextualTool
+	contextualTools := []string{"message", "spawn", "subagent", "consult_specialist", "link_topic", "manage_telegram"}
+	for _, name := range contextualTools {
+		if tool, ok := al.tools.Get(name); ok {
+			if ct, ok := tool.(tools.ContextualTool); ok {
+				ct.SetContext(channel, chatID)
+			}
 		}
 	}
 }
