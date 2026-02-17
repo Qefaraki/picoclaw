@@ -20,7 +20,7 @@ RUN make build
 # ============================================================
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates tzdata curl python3 py3-requests
+RUN apk add --no-cache ca-certificates tzdata curl python3 py3-requests jq
 
 # Copy binary and scripts
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
