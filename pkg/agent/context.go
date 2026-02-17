@@ -290,8 +290,22 @@ func (cb *ContextBuilder) BuildSpecialistMessages(history []providers.Message, s
 
 	systemPrompt := persona + "\n\n## Current Time\n" + now
 
-	// Only include search_memory tool hint (specialists can search their scoped knowledge)
-	systemPrompt += "\n\n## Tools\nYou have a `search_memory` tool to search your knowledge base. Use it proactively when answering questions."
+	// Add USER.md for user context
+	userMD := filepath.Join(cb.workspace, "USER.md")
+	if data, err := os.ReadFile(userMD); err == nil {
+		systemPrompt += "\n\n## User Profile\n\n" + string(data)
+	}
+
+	// Add skills summary so specialist knows what's available
+	if cb.skillsLoader != nil {
+		skillsSummary := cb.skillsLoader.BuildSkillsSummary()
+		if skillsSummary != "" {
+			systemPrompt += fmt.Sprintf("\n\n## Skills\nYou have access to skills that extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.\n%s", skillsSummary)
+		}
+	}
+
+	// Full tool awareness — topic-linked specialists get the full tool registry
+	systemPrompt += "\n\n## Tools\nYou have access to all agent tools including: exec (run scripts), read_file, write_file, edit_file, list_dir, web_search, web_fetch, search_memory, message (send messages to user), and cron (schedule tasks). Use them as needed."
 
 	systemPrompt += "\n\n## Instructions\n\nYou ARE this specialist. Stay in character. When answering, cite your sources (who said it, when, where) so the user can verify. Be thorough and draw on all relevant knowledge available to you. Do NOT describe yourself as a general AI assistant."
 

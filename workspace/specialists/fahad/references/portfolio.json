@@ -1,0 +1,14 @@
+{
+  "holdings": [],
+  "cash": {
+    "SAR": 0,
+    "GBP": 0,
+    "USD": 0
+  },
+  "savings_goals": [],
+  "benchmarks": {
+    "saudi": "^TASI.SR",
+    "us": "^GSPC"
+  },
+  "last_updated": ""
+}

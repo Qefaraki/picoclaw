@@ -1,0 +1,40 @@
+{
+  "indices": {
+    "^GSPC": "S&P 500",
+    "^IXIC": "NASDAQ",
+    "^TASI.SR": "Tadawul",
+    "^DJI": "Dow Jones"
+  },
+  "saudi_stocks": {
+    "1120.SR": "Al Rajhi Bank",
+    "2222.SR": "Saudi Aramco",
+    "4001.SR": "Al Othaim Markets"
+  },
+  "us_stocks": {
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "GOOGL": "Alphabet",
+    "AMZN": "Amazon",
+    "NVDA": "NVIDIA",
+    "META": "Meta",
+    "TSLA": "Tesla"
+  },
+  "commodities": {
+    "GC=F": "Gold",
+    "SI=F": "Silver"
+  },
+  "crypto_alerts_only": {
+    "BTC-USD": "Bitcoin (significant events only)"
+  },
+  "currencies": {
+    "USDSAR=X": "USD/SAR",
+    "GBPSAR=X": "GBP/SAR",
+    "GBPUSD=X": "GBP/USD"
+  },
+  "alert_thresholds": {
+    "index_pct": 2.0,
+    "stock_pct": 5.0,
+    "commodity_pct": 3.0,
+    "crypto_pct": 8.0
+  }
+}
