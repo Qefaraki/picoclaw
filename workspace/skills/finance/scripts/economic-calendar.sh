@@ -6,6 +6,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../references/.env"
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+
 API_KEY="${1:-${FINNHUB_API_KEY:-}}"
 
 if [ -z "$API_KEY" ]; then
