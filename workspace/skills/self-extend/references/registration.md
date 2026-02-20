@@ -67,6 +67,40 @@ These are available in `main.go` after channel setup:
 - `cfg *config.Config` — full config
 - `msgBus *bus.MessageBus` — message bus
 
+## MCP Tool Registration
+
+MCP (Model Context Protocol) tools from external servers are auto-registered at startup. In `createToolRegistry()`:
+
+```go
+// Register MCP tools from configured servers
+if cfg.Tools.MCP.Servers != nil {
+    mcpManager := mcp.NewMCPManager()
+    mcpManager.StartFromConfig(cfg.Tools.MCP.Servers)
+    count := mcp.RegisterMCPTools(mcpManager, toolsRegistry)
+    // Each MCP tool appears as "mcp_{server}_{tool}" in the registry
+}
+```
+
+MCP servers are subprocess-based (stdio JSON-RPC 2.0). Configure them in `config.json`:
+
+```json
+{
+  "tools": {
+    "mcp": {
+      "servers": [
+        {
+          "name": "calendar",
+          "command": "npx",
+          "args": ["-y", "@anthropic/mcp-google-calendar"],
+          "env": {"GOOGLE_CREDENTIALS": "/path/to/creds.json"},
+          "enabled": true
+        }
+      ]
+    }
+  }
+}
+```
+
 ## Tool Registry Methods
 
 ```go
@@ -74,4 +108,5 @@ registry.Register(tool)           // Add a tool
 registry.Get("name") (Tool, bool) // Get a tool by name
 registry.List() []string          // List all tool names
 registry.Count() int              // Number of registered tools
+registry.GetSummaries() []string  // One-line summaries for system prompt
 ```

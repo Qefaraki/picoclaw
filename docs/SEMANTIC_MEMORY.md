@@ -71,6 +71,9 @@ User sends message
 runAgentLoop() processes message, gets finalContent
         |
         v
+Trivial message check: if message < 15 chars or response < 50 chars → skip extraction
+        |
+        v
 Step 6: Save to session JSON (synchronous, blocks)
         |
         v
@@ -83,17 +86,20 @@ Step 7: Fire two goroutines (async, non-blocking):
         |     - Stores document in chromem-go (persisted to disk as gob files)
         |
         +---> goroutine 2: extractor.ExtractAndConsolidate()
-              - LLM call #1: Extract facts from conversation → JSON array
+              - Trivial message filter: skips "ok", "thanks", "hi", etc.
+              - LLM call #1 (cheap model): Extract facts → JSON array
               - For each fact:
                   - Vector search existing knowledge (top 3, similarity > 0.8)
                   - If similar facts exist:
-                      - LLM call #2: Decide ADD/UPDATE/DELETE/NOOP
+                      - LLM call #2 (cheap model): Decide ADD/UPDATE/DELETE/NOOP
                       - Execute the operation
                   - If no similar facts:
                       - Add as new knowledge
+              - LLM call #3 (cheap model): Extract relations → (subject, predicate, object) triples
+              - Store relations in workspace/memory/relations.jsonl
         |
         v
-Step 8: Summarization (existing, unchanged)
+Step 8: Summarization (existing, uses cheap model)
 ```
 
 ### Timing
@@ -105,28 +111,41 @@ Step 8: Summarization (existing, unchanged)
 ### Cost Per Turn
 
 - **Embedding**: ~500 tokens × $0.02/M = $0.00001 per turn
-- **Extraction LLM call**: Same model as configured provider, ~500 input + 200 output tokens
-- **Consolidation LLM calls**: 0-N calls depending on extracted facts (0 if no similar existing facts)
-- **Practical estimate**: ~2x the per-turn LLM cost for the extraction+consolidation pipeline. For a personal assistant doing 50 turns/day, this is negligible.
+- **Extraction LLM call**: Uses cheap model (Haiku by default), ~500 input + 200 output tokens
+- **Consolidation LLM calls**: 0-N calls depending on extracted facts (0 if no similar existing facts), also uses cheap model
+- **Relation extraction**: One additional cheap model call per turn for graph triples
+- **Trivial messages**: Zero extraction cost — "ok", "thanks", "hi", etc. are filtered out before any LLM call
+- **Practical estimate**: Much cheaper than before since extraction/consolidation/summarization all use the cheap model. For a personal assistant doing 50 turns/day, this is negligible.
 
 ## File Layout
 
 ```
 pkg/memory/
-  vectorstore.go   — VectorStore: chromem-go wrapper, two collections, CRUD + search
-  extractor.go     — KnowledgeExtractor: LLM fact extraction + Mem0-style consolidation
+  vectorstore.go   — VectorStore: chromem-go wrapper, two collections, CRUD + search + shared blackboard
+  extractor.go     — KnowledgeExtractor: LLM fact extraction + Mem0-style consolidation + relation extraction
+  relations.go     — RelationStore: graph-augmented memory (subject-predicate-object triples)
 
 pkg/tools/
   memory_search.go — search_memory tool: thin wrapper over VectorStore.Search()
+  think.go         — think tool: internal reasoning without output tokens
+
+pkg/metrics/
+  tracker.go       — TokenTracker: per-turn token/cost logging to JSONL
 
 pkg/agent/
   loop.go          — Initialization in NewAgentLoop(), async indexing in runAgentLoop()
 
 pkg/config/
-  config.go        — MemoryConfig struct (semantic_search, knowledge_extract, embedding_model)
+  config.go        — MemoryConfig, AgentDefaults.CheapModel, EmailMonitorConfig, MCPConfig
 
 workspace/memory/vectors/
   (runtime)        — chromem-go persistent storage (gob files, auto-created)
+
+workspace/memory/relations.jsonl
+  (runtime)        — graph relation triples (auto-created)
+
+workspace/metrics/tokens.jsonl
+  (runtime)        — per-turn token usage and cost tracking (auto-created)
 ```
 
 ## Configuration Reference
@@ -170,6 +189,28 @@ Environment variables: `PICOCLAW_MEMORY_SEMANTIC_SEARCH`, `PICOCLAW_MEMORY_KNOWL
 - Async goroutines use `context.Background()` — intentional, so they're not canceled when the message handler finishes
 - If the server shuts down during an async operation, the goroutine runs until the embedding API call completes or times out
 - `decideAction` in the extractor has its own 30-second context timeout
+
+## Shared Blackboard Memory
+
+Specialists can access knowledge beyond their own scope. When `SearchKnowledgeScoped()` is called:
+
+1. **Specialist-scoped search first**: Search for knowledge tagged with the specialist's name
+2. **Global backfill**: If fewer results than requested, backfill with unscoped (global) knowledge
+3. **Deduplication**: Results are deduplicated by ID to avoid showing the same fact twice
+
+This means a finance specialist can access general knowledge about the user, while still prioritizing its own domain knowledge.
+
+## Graph-Augmented Memory
+
+In addition to vector-based semantic search, PicoClaw extracts structured relations from conversations:
+
+- **Format**: `(Subject, Predicate, Object)` triples (e.g., "Muhammad → studies_at → QMUL")
+- **Storage**: `workspace/memory/relations.jsonl` — one JSON object per relation
+- **Extraction**: After fact extraction, a second LLM call (cheap model) extracts entity relationships
+- **Deduplication**: Identical triples are not stored twice
+- **Query**: 1-hop traversal — given an entity, find all related entities
+
+The `search_memory` tool includes 1-hop relation results alongside vector search results, giving the agent a richer understanding of entity connections.
 
 ## Known Limitations
 

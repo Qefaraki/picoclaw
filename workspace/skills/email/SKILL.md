@@ -80,10 +80,64 @@ The email script should be at `/usr/local/lib/picoclaw/scripts/email_dashboard.p
 ### Email bodies truncated
 Long email bodies are truncated at 8000 characters to avoid flooding the LLM context window. If the user needs the full body, let them know it was truncated.
 
+## Automatic Email Monitoring
+
+PicoClaw can automatically monitor inboxes in the background and triage incoming emails using an LLM.
+
+### Configuration
+
+```json
+{
+  "tools": {
+    "email": {
+      "enabled": true,
+      "address": "primary@example.com",
+      "accounts": [
+        {"address": "user@university.ac.uk", "label": "University"},
+        {"address": "user@gmail.com", "label": "Personal"}
+      ],
+      "monitor": {
+        "enabled": true,
+        "interval_mins": 5,
+        "digest_time": "0 7 * * *"
+      }
+    }
+  }
+}
+```
+
+### Multi-Account Support
+
+The `accounts` array allows monitoring multiple inboxes. If `accounts` is empty but `address` is set, it falls back to single-account mode. Each account has a `label` for identification in notifications.
+
+### Triage Categories
+
+The monitor uses a cheap LLM model (Haiku) to classify each unread email:
+
+| Category | Action | Example |
+|----------|--------|---------|
+| `urgent` | Immediate Telegram notification | Deadline today, security alert, payment issue |
+| `delivery_arrived` | Immediate notification | Package delivered/collected |
+| `normal` | Saved to digest | Newsletters, receipts, routine messages |
+
+### Digest
+
+Normal emails are saved to `workspace/email_digest.jsonl`. The morning briefing includes a digest section that reads and clears this file. Each entry contains: timestamp, account label, sender, subject, summary, and UID.
+
+### How It Works
+
+1. Every N minutes (default 5), the monitor checks each account for unread emails
+2. For each unread email, it fetches the body and runs LLM triage
+3. Urgent/delivery emails trigger immediate Telegram notifications
+4. Normal emails are appended to the digest file
+5. Processed emails are marked as read
+
 ## Architecture
 
 - **Go tool**: `pkg/tools/email.go` — implements `Tool` interface, shells out to Python script
+- **Email monitor**: `pkg/email/monitor.go` — background email monitoring service with LLM triage
 - **Python script**: `scripts/email_dashboard.py` — handles IMAP/SMTP connections, OAuth2 token lifecycle
-- **Config**: `pkg/config/config.go` → `EmailConfig` struct with `enabled`, `address`
+- **Config**: `pkg/config/config.go` → `EmailConfig` struct with `enabled`, `address`, `accounts`, `monitor`
 - **Registration**: `pkg/agent/loop.go` → `createToolRegistry()`, enabled when `tools.email.enabled = true`
+- **Monitor startup**: `cmd/picoclaw/main.go` → started after heartbeat setup when `tools.email.monitor.enabled = true`
 - **Credentials**: `~/.email_dashboard/credentials.json` (bind-mount `/data/picoclaw/.email_dashboard/` in Docker)

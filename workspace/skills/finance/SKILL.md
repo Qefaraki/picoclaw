@@ -59,6 +59,12 @@ All scripts are in `workspace/skills/finance/scripts/`. Run them via the `exec` 
 |--------|-------|-------------|
 | `expenses-parse.sh` | `bash expenses-parse.sh <file>` | Parse bank statements (CSV). Categorizes and summarizes spending |
 
+### Email Digest
+
+| Script | Usage | Description |
+|--------|-------|-------------|
+| `email-digest.sh` | `bash email-digest.sh` | Reads `workspace/email_digest.jsonl`, outputs JSON array, truncates file. Used by morning briefing |
+
 ### Master Script
 
 | Script | Usage | Description |

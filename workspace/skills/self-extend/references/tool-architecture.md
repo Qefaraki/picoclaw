@@ -131,6 +131,62 @@ import (
 
 When writing tools inside `pkg/tools/`, you don't need to import the tools package — you're already in it. Just use `SilentResult()`, `ErrorResult()`, etc. directly.
 
+## Example: Think Tool (Minimal Tool)
+
+The simplest possible tool — accepts input, returns a silent result:
+
+```go
+// pkg/tools/think.go
+type ThinkTool struct{}
+
+func NewThinkTool() *ThinkTool { return &ThinkTool{} }
+func (t *ThinkTool) Name() string { return "think" }
+func (t *ThinkTool) Description() string {
+    return "Use this tool to think through a problem step-by-step before acting."
+}
+func (t *ThinkTool) Parameters() map[string]interface{} {
+    return map[string]interface{}{
+        "type": "object",
+        "properties": map[string]interface{}{
+            "thought": map[string]interface{}{
+                "type": "string",
+                "description": "Your internal reasoning",
+            },
+        },
+        "required": []string{"thought"},
+    }
+}
+func (t *ThinkTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
+    thought, _ := args["thought"].(string)
+    if thought == "" { return ErrorResult("thought is required") }
+    return SilentResult("Thought recorded.")
+}
+```
+
+## MCP Bridge Pattern
+
+PicoClaw can wrap external MCP (Model Context Protocol) server tools as native PicoClaw tools. See `pkg/mcp/bridge.go`:
+
+```go
+// MCPBridgeTool wraps an MCP server tool as a PicoClaw Tool
+type MCPBridgeTool struct {
+    manager    *MCPManager
+    serverName string
+    toolDef    ToolDefinition
+}
+
+func (t *MCPBridgeTool) Name() string {
+    return fmt.Sprintf("mcp_%s_%s", t.serverName, t.toolDef.Name)
+}
+
+func (t *MCPBridgeTool) Execute(ctx context.Context, args map[string]interface{}) *tools.ToolResult {
+    result, err := t.manager.CallTool(t.serverName, t.toolDef.Name, args)
+    // ...
+}
+```
+
+MCP tools are auto-discovered from configured MCP servers and registered in the tool registry at startup. The MCP client (`pkg/mcp/client.go`) communicates via stdio JSON-RPC 2.0.
+
 ## Logging
 
 ```go

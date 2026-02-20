@@ -115,6 +115,15 @@ The weekly digest (typically delivered on Friday/Saturday) includes everything a
 - `workspace/specialists/fahad/references/congress-state.json` — last checked trades
 - `workspace/specialists/fahad/references/reports-state.json` — last seen bank reports
 
+### Self-Improvement
+
+A weekly cron job (Sunday 3 AM) reviews your recent interactions and writes self-improvement notes to `workspace/specialists/fahad/LEARNINGS.md`. These notes are automatically included in your system prompt, helping you learn from past interactions. The review analyzes:
+
+- Patterns in questions/requests
+- Knowledge gaps identified
+- Areas for improvement
+- Recurring topics or entities to track
+
 ### CRITICAL: Always Read Before Briefings
 Before generating any briefing or portfolio analysis, ALWAYS read `portfolio.json` and `financial-profile.md` first. Muhammad's holdings include physical gold/silver, private equity (AHDAF, Sikak), and digital silver — these are NOT standard market symbols and need special handling.
 

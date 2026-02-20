@@ -465,10 +465,19 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ~/.picoclaw/workspace/
 ├── sessions/          # Conversation sessions and history
 ├── memory/           # Long-term memory (MEMORY.md)
+│   ├── vectors/      # Semantic memory (chromem-go persistent storage)
+│   └── relations.jsonl # Graph-augmented memory (subject-predicate-object triples)
+├── metrics/          # Observability
+│   └── tokens.jsonl  # Per-turn token usage, cost tracking
+├── audit/            # Security audit logs
+│   └── exec.log      # Shell command audit trail
 ├── state/            # Persistent state (topic mappings, etc.)
 ├── cron/             # Scheduled jobs database
 ├── skills/           # Custom skills (including self-extend)
 ├── specialists/      # Domain specialists (personas + knowledge)
+│   └── {name}/LEARNINGS.md  # Auto-generated self-improvement notes
+├── deploy/           # Deployment configs (Langfuse, etc.)
+├── email_digest.jsonl # Pending email digest entries
 ├── AGENTS.md         # Agent behavior guide
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
 ├── IDENTITY.md       # Agent identity
@@ -528,6 +537,15 @@ When **restricted**, these patterns are blocked:
 * Writing to `/dev/sd[a-z]` — Direct disk writes
 * `shutdown`, `reboot`, `poweroff` — System shutdown
 * Fork bomb `:(){ :|:& };:`
+* `iptables`, `ip6tables` — Firewall manipulation
+* `systemctl stop/disable/mask` — Service disruption
+* `kill -9`, `pkill -9` — Forced process termination
+* `chmod 777` — Insecure permissions
+* `curl|sh`, `wget|sh` — Remote code execution
+* `nc -l` — Listener sockets
+* `DROP TABLE/DATABASE` — Destructive SQL
+
+All exec commands are logged to `workspace/audit/exec.log` for security auditing.
 
 When **unrestricted**, only fork bombs are blocked. The agent has full control over the system — it can install packages, manage services, edit system configs, and operate as a VPS administrator.
 
@@ -594,6 +612,8 @@ PicoClaw supports domain specialists — autonomous personas with their own iden
 
 The agent can manage specialists autonomously — just tell it "create a specialist for finance" or "link this topic to the cooking specialist" and it will handle everything.
 
+**Specialist Self-Improvement**: A weekly cron job (Sunday 3 AM) reviews each specialist's recent interactions and writes self-improvement notes to `LEARNINGS.md`. These notes are automatically included in the specialist's system prompt, creating a feedback loop where specialists get better over time.
+
 ### Self-Extension
 
 When running in unrestricted mode, the agent can write its own tools in Go, compile them into its binary, and restart itself to gain new capabilities. A built-in `self-extend` skill guides the process:
@@ -604,6 +624,95 @@ When running in unrestricted mode, the agent can write its own tools in Go, comp
 4. Restart the process
 
 This means the agent can extend itself on demand — if it needs a capability it doesn't have, it can build one.
+
+### Cost Optimization
+
+PicoClaw includes several cost-saving features:
+
+| Feature | Description |
+|---------|-------------|
+| **Prompt Caching** | Marks the last system prompt block with `cache_control: ephemeral` for Anthropic's prompt caching — reduces input token costs on subsequent turns |
+| **Cheap Model Routing** | Background tasks (knowledge extraction, summarization, relation extraction) use a cheaper model (default: `claude-haiku-3-5-20241022`) |
+| **Trivial Message Skip** | Messages like "ok", "thanks", "hi" skip the extraction pipeline entirely |
+| **Think Tool** | A `think` tool lets the LLM reason internally without generating output tokens for the user |
+
+Configure the cheap model in `config.json`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "cheap_model": "claude-haiku-3-5-20241022"
+    }
+  }
+}
+```
+
+### Token Tracking & Observability
+
+Every LLM call is logged to `workspace/metrics/tokens.jsonl` with:
+- Input/output token counts and cache hit/miss stats
+- Per-call cost calculation using model-specific pricing
+- Specialist name and tools used per iteration
+- Session key for grouping
+
+### Rate Limiting
+
+Per-sender rate limiting protects against abuse: 20 messages per minute per sender (sliding window). Exceeding the limit returns a "Slow down" message. System and cron messages bypass the limit.
+
+### MCP (Model Context Protocol) Integration
+
+PicoClaw can connect to external MCP servers via stdio JSON-RPC 2.0. MCP tools are automatically discovered and registered in the tool registry, making them available to the agent.
+
+```json
+{
+  "tools": {
+    "mcp": {
+      "servers": [
+        {
+          "name": "calendar",
+          "command": "npx",
+          "args": ["-y", "@anthropic/mcp-google-calendar"],
+          "env": {"GOOGLE_CREDENTIALS": "/path/to/creds.json"},
+          "enabled": true
+        }
+      ]
+    }
+  }
+}
+```
+
+Each MCP server tool appears in the registry as `mcp_{server}_{tool}`.
+
+### Email Monitoring
+
+PicoClaw can automatically monitor multiple email inboxes and triage incoming messages using an LLM:
+
+| Triage Category | Behavior |
+|-----------------|----------|
+| **urgent** | Immediate Telegram notification |
+| **delivery_arrived** | Immediate notification (package delivered) |
+| **normal** | Saved to digest for morning briefing |
+
+```json
+{
+  "tools": {
+    "email": {
+      "enabled": true,
+      "address": "user@example.com",
+      "accounts": [
+        {"address": "user@university.ac.uk", "label": "University"},
+        {"address": "user@gmail.com", "label": "Personal"}
+      ],
+      "monitor": {
+        "enabled": true,
+        "interval_mins": 5,
+        "digest_time": "0 7 * * *"
+      }
+    }
+  }
+}
+```
 
 ### Heartbeat (Periodic Tasks)
 
@@ -741,7 +850,8 @@ picoclaw agent -m "Hello"
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-5"
+      "model": "anthropic/claude-opus-4-5",
+      "cheap_model": "claude-haiku-3-5-20241022"
     }
   },
   "providers": {
@@ -792,6 +902,19 @@ picoclaw agent -m "Hello"
         "enabled": true,
         "max_results": 5
       }
+    },
+    "email": {
+      "enabled": false,
+      "address": "user@example.com",
+      "accounts": [],
+      "monitor": {
+        "enabled": false,
+        "interval_mins": 5,
+        "digest_time": "0 7 * * *"
+      }
+    },
+    "mcp": {
+      "servers": []
     }
   },
   "heartbeat": {

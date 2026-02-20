@@ -34,6 +34,12 @@ ssh -i ~/.ssh/hetzner root@89.167.58.152 "cd /data/coolify && docker compose up 
 - Expenses: `/data/picoclaw/workspace/specialists/fahad/references/expenses/`
 - Skills: `/data/picoclaw/workspace/skills/`
 - Memory: `/data/picoclaw/workspace/memory/`
+- Graph relations: `/data/picoclaw/workspace/memory/relations.jsonl`
+- Token metrics: `/data/picoclaw/workspace/metrics/tokens.jsonl`
+- Exec audit log: `/data/picoclaw/workspace/audit/exec.log`
+- Email digest: `/data/picoclaw/workspace/email_digest.jsonl`
+- Specialist learnings: `/data/picoclaw/workspace/specialists/{name}/LEARNINGS.md`
+- Deploy configs: `/data/picoclaw/workspace/deploy/`
 - Heartbeat log: `/data/picoclaw/workspace/heartbeat.log`
 
 ## Build & Test
