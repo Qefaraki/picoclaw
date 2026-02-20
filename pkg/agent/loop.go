@@ -24,9 +24,12 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/mcp"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/memory"
+	"github.com/sipeed/picoclaw/pkg/metrics"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	specialistpkg "github.com/sipeed/picoclaw/pkg/specialists"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/specialists"
 	"github.com/sipeed/picoclaw/pkg/state"
@@ -71,10 +74,18 @@ type AgentLoop struct {
 	streamUpdateFn func(channel, chatID string) func(fullText string)
 	vectorStore    *memory.VectorStore
 	extractor      *memory.KnowledgeExtractor
+	tracker        *metrics.Tracker
+
+	// Cheap model for background tasks (summarization, extraction)
+	cheapModel string
 
 	// Specialist system
 	topicMappings    *state.TopicMappingStore
 	specialistLoader *specialists.SpecialistLoader
+
+	// Rate limiting: sliding window per sender
+	rateLimiter map[string][]int64
+	rateMu      sync.Mutex
 
 	// Message injection: routes new messages to active session or pending queue
 	pendingMu     sync.Mutex
@@ -113,6 +124,9 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	// Shell execution
 	registry.Register(tools.NewExecTool(workspace, restrict))
 
+	// Think tool — internal reasoning scratchpad
+	registry.Register(tools.NewThinkTool())
+
 	if searchTool := tools.NewWebSearchTool(tools.WebSearchToolOptions{
 		BraveAPIKey:          cfg.Tools.Web.Brave.APIKey,
 		BraveMaxResults:      cfg.Tools.Web.Brave.MaxResults,
@@ -149,6 +163,18 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	// Semantic memory search
 	if vectorStore != nil {
 		registry.Register(tools.NewMemorySearchTool(vectorStore))
+	}
+
+	// MCP server tools
+	if len(cfg.Tools.MCP.Servers) > 0 {
+		mcpManager := mcp.NewMCPManager()
+		mcpManager.StartFromConfig(cfg.Tools.MCP.Servers)
+		count := mcp.RegisterMCPTools(mcpManager, registry)
+		if count > 0 {
+			logger.InfoCF("agent", "MCP tools registered", map[string]interface{}{
+				"count": count,
+			})
+		}
 	}
 
 	// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
@@ -200,7 +226,14 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 			} else {
 				vectorStore = vs
 				if cfg.Tools.Memory.KnowledgeExtract {
-					extractor = memory.NewKnowledgeExtractor(provider, cfg.Agents.Defaults.Model, vs)
+					cheapModel := cfg.Agents.Defaults.CheapModel
+					if cheapModel == "" {
+						cheapModel = cfg.Agents.Defaults.Model
+					}
+					extractor = memory.NewKnowledgeExtractor(provider, cheapModel, vs)
+					// Initialize graph-augmented memory
+					relationStore := memory.NewRelationStore(workspace)
+					extractor.SetRelationStore(relationStore)
 				}
 				logger.InfoCF("agent", "Semantic memory initialized", map[string]interface{}{
 					"knowledge_extract": cfg.Tools.Memory.KnowledgeExtract,
@@ -259,11 +292,20 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	contextBuilder.SetToolsRegistry(toolsRegistry)
 	contextBuilder.SetSpecialistLoader(specialistLoader)
 
+	cheapModel := cfg.Agents.Defaults.CheapModel
+	if cheapModel == "" {
+		cheapModel = cfg.Agents.Defaults.Model
+	}
+
+	tracker := metrics.NewTracker(workspace)
+
 	return &AgentLoop{
 		bus:              msgBus,
 		provider:         provider,
 		workspace:        workspace,
 		model:            cfg.Agents.Defaults.Model,
+		cheapModel:       cheapModel,
+		rateLimiter:      make(map[string][]int64),
 		contextWindow:    cfg.Agents.Defaults.MaxTokens, // Restore context window for summarization
 		maxIterations:    cfg.Agents.Defaults.MaxToolIterations,
 		sessions:         sessionsManager,
@@ -273,6 +315,7 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		summarizing:      sync.Map{},
 		vectorStore:      vectorStore,
 		extractor:        extractor,
+		tracker:          tracker,
 		topicMappings:    topicMappings,
 		specialistLoader: specialistLoader,
 	}
@@ -344,6 +387,19 @@ func (al *AgentLoop) routeMessages(ctx context.Context) {
 			return
 		}
 
+		// Rate limit check (skip system/cron messages)
+		if msg.Channel != "system" && msg.SenderID != "cron" {
+			senderKey := fmt.Sprintf("%s:%s", msg.Channel, msg.SenderID)
+			if !al.checkRateLimit(senderKey) {
+				al.bus.PublishOutbound(bus.OutboundMessage{
+					Channel: msg.Channel,
+					ChatID:  msg.ChatID,
+					Content: "Slow down — max 20 messages per minute.",
+				})
+				continue
+			}
+		}
+
 		al.pendingMu.Lock()
 		active := al.activeSession
 		al.pendingMu.Unlock()
@@ -381,6 +437,33 @@ func (al *AgentLoop) routeMessages(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// checkRateLimit enforces a 20-messages-per-minute sliding window per sender.
+// Returns true if the message is allowed, false if rate exceeded.
+func (al *AgentLoop) checkRateLimit(senderKey string) bool {
+	al.rateMu.Lock()
+	defer al.rateMu.Unlock()
+
+	now := time.Now().UnixMilli()
+	windowStart := now - 60_000 // 1 minute window
+
+	// Filter out old timestamps
+	timestamps := al.rateLimiter[senderKey]
+	valid := timestamps[:0]
+	for _, ts := range timestamps {
+		if ts > windowStart {
+			valid = append(valid, ts)
+		}
+	}
+
+	if len(valid) >= 20 {
+		al.rateLimiter[senderKey] = valid
+		return false
+	}
+
+	al.rateLimiter[senderKey] = append(valid, now)
+	return true
 }
 
 func (al *AgentLoop) Stop() {
@@ -523,6 +606,16 @@ func (al *AgentLoop) processSystemMessage(ctx context.Context, msg bus.InboundMe
 				"content_len": len(content),
 				"channel":     originChannel,
 			})
+		return "", nil
+	}
+
+	// Handle REVIEW_SPECIALISTS cron trigger
+	if strings.Contains(msg.Content, "REVIEW_SPECIALISTS") {
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			specialistpkg.ReviewAllSpecialists(bgCtx, al.specialistLoader, al.provider, al.cheapModel, al.vectorStore, al.workspace)
+		}()
 		return "", nil
 	}
 
@@ -708,7 +801,8 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		go al.vectorStore.IndexConversation(context.Background(), opts.SessionKey, opts.Channel, opts.ChatID, opts.UserMessage, finalContent)
 		// Skip global extraction when specialist already handled scoped extraction,
 		// or when running in specialist mode (topic-linked).
-		if al.extractor != nil && !usedSpecialist && opts.Specialist == "" {
+		// Also skip when messages are too short to contain meaningful facts.
+		if al.extractor != nil && !usedSpecialist && opts.Specialist == "" && len(opts.UserMessage) > 15 && len(finalContent) > 50 {
 			go al.extractor.ExtractAndConsolidate(context.Background(), opts.UserMessage, finalContent, opts.SessionKey, "", memory.KnowledgeIndexOpts{})
 		} else if al.extractor != nil && opts.Specialist != "" {
 			// Specialist mode: extract with specialist scope
@@ -832,6 +926,25 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 					"error":     err.Error(),
 				})
 			return "", iteration, usedSpecialist, fmt.Errorf("LLM call failed: %w", err)
+		}
+
+		// Record token usage
+		if al.tracker != nil && response.Usage != nil {
+			toolNames := make([]string, 0, len(response.ToolCalls))
+			for _, tc := range response.ToolCalls {
+				toolNames = append(toolNames, tc.Name)
+			}
+			go al.tracker.Record(metrics.TokenEvent{
+				SessionKey:   opts.SessionKey,
+				Model:        al.model,
+				InputTokens:  response.Usage.PromptTokens,
+				OutputTokens: response.Usage.CompletionTokens,
+				CacheRead:    response.Usage.CacheReadInputTokens,
+				CacheCreate:  response.Usage.CacheCreationInputTokens,
+				Specialist:   opts.Specialist,
+				ToolsUsed:    toolNames,
+				Iteration:    iteration,
+			})
 		}
 
 		// Strip <think>...</think> reasoning blocks (e.g. MiniMax, DeepSeek)
@@ -1216,7 +1329,7 @@ func (al *AgentLoop) summarizeSession(sessionKey string) {
 
 		// Merge them
 		mergePrompt := fmt.Sprintf("Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s", s1, s2)
-		resp, err := al.provider.Chat(ctx, []providers.Message{{Role: "user", Content: mergePrompt}}, nil, al.model, map[string]interface{}{
+		resp, err := al.provider.Chat(ctx, []providers.Message{{Role: "user", Content: mergePrompt}}, nil, al.cheapModel, map[string]interface{}{
 			"max_tokens":  1024,
 			"temperature": 0.3,
 		})
@@ -1251,7 +1364,7 @@ func (al *AgentLoop) summarizeBatch(ctx context.Context, batch []providers.Messa
 		prompt += fmt.Sprintf("%s: %s\n", m.Role, m.Content)
 	}
 
-	response, err := al.provider.Chat(ctx, []providers.Message{{Role: "user", Content: prompt}}, nil, al.model, map[string]interface{}{
+	response, err := al.provider.Chat(ctx, []providers.Message{{Role: "user", Content: prompt}}, nil, al.cheapModel, map[string]interface{}{
 		"max_tokens":  1024,
 		"temperature": 0.3,
 	})

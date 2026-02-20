@@ -29,6 +29,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
 	"github.com/sipeed/picoclaw/pkg/devices"
+	emailpkg "github.com/sipeed/picoclaw/pkg/email"
 	"github.com/sipeed/picoclaw/pkg/heartbeat"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/memory"
@@ -617,6 +618,37 @@ func gatewayCmd() {
 		return tools.SilentResult(response)
 	})
 
+	// Email monitor setup
+	var emailMonitor *emailpkg.EmailMonitor
+	if cfg.Tools.Email.Monitor.Enabled {
+		accounts := cfg.Tools.Email.Accounts
+		// Backward compat: if accounts empty but address set, treat as single account
+		if len(accounts) == 0 && cfg.Tools.Email.Address != "" {
+			accounts = []config.EmailAccount{{Address: cfg.Tools.Email.Address, Label: "Primary"}}
+		}
+		if len(accounts) > 0 {
+			cheapModel := cfg.Agents.Defaults.CheapModel
+			if cheapModel == "" {
+				cheapModel = cfg.Agents.Defaults.Model
+			}
+			// Resolve target channel from state
+			sm := state.NewManager(cfg.WorkspacePath())
+			lastChannel := sm.GetLastChannel()
+			var emChannel, emChatID string
+			if parts := strings.SplitN(lastChannel, ":", 2); len(parts) == 2 {
+				emChannel = parts[0]
+				emChatID = parts[1]
+			}
+			emailMonitor = emailpkg.NewEmailMonitor(accounts, provider, cheapModel, cfg.WorkspacePath(), msgBus, emChannel, emChatID)
+			intervalMins := cfg.Tools.Email.Monitor.IntervalMins
+			if intervalMins < 1 {
+				intervalMins = 5
+			}
+			emailMonitor.Start(intervalMins)
+			fmt.Printf("✓ Email monitor started (%d accounts, every %d min)\n", len(accounts), intervalMins)
+		}
+	}
+
 	channelManager, err := channels.NewManager(cfg, msgBus)
 	if err != nil {
 		fmt.Printf("Error creating channel manager: %v\n", err)
@@ -676,6 +708,12 @@ func gatewayCmd() {
 	}
 	fmt.Println("✓ Cron service started")
 
+	// Register weekly specialist self-improvement review (Sunday 3 AM)
+	cronService.AddJob("specialist-review", cron.CronSchedule{
+		Kind: "cron",
+		Expr: "0 3 * * 0",
+	}, "REVIEW_SPECIALISTS", false, "", "")
+
 	if err := heartbeatService.Start(); err != nil {
 		fmt.Printf("Error starting heartbeat service: %v\n", err)
 	}
@@ -707,6 +745,9 @@ func gatewayCmd() {
 
 	fmt.Println("\nShutting down...")
 	cancel()
+	if emailMonitor != nil {
+		emailMonitor.Stop()
+	}
 	deviceService.Stop()
 	heartbeatService.Stop()
 	cronService.Stop()

@@ -35,6 +35,15 @@ func NewExecTool(workingDir string, restrict bool) *ExecTool {
 			regexp.MustCompile(`>\s*/dev/sd[a-z]\b`),
 			regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
 			regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+			regexp.MustCompile(`\b(iptables|ip6tables)\b`),
+			regexp.MustCompile(`\bsystemctl\s+(stop|disable|mask)\b`),
+			regexp.MustCompile(`\bkill\s+-9\b`),
+			regexp.MustCompile(`\bpkill\s+-9\b`),
+			regexp.MustCompile(`\bchmod\s+777\b`),
+			regexp.MustCompile(`\bcurl\b.*\|\s*(ba)?sh\b`),
+			regexp.MustCompile(`\bwget\b.*\|\s*(ba)?sh\b`),
+			regexp.MustCompile(`\bnc\s+-l\b`),
+			regexp.MustCompile(`(?i)\bDROP\s+(TABLE|DATABASE)\b`),
 		}
 	} else {
 		// Unrestricted mode: only block fork bombs
@@ -106,6 +115,9 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) *To
 	if guardError := t.guardCommand(command, cwd); guardError != "" {
 		return ErrorResult(guardError)
 	}
+
+	// Audit log: record executed commands
+	auditLog(t.workingDir, command)
 
 	cmdCtx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
@@ -220,6 +232,20 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	}
 
 	return ""
+}
+
+// auditLog appends an entry to workspace/audit/exec.log for traceability.
+func auditLog(workingDir, command string) {
+	auditDir := filepath.Join(workingDir, "audit")
+	os.MkdirAll(auditDir, 0755)
+	logPath := filepath.Join(auditDir, "exec.log")
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	entry := fmt.Sprintf("[%s] %s\n", time.Now().Format(time.RFC3339), command)
+	f.WriteString(entry)
 }
 
 func (t *ExecTool) SetTimeout(timeout time.Duration) {

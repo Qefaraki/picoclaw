@@ -225,6 +225,8 @@ func buildClaudeParams(messages []Message, tools []ToolDefinition, model string,
 	}
 
 	if len(system) > 0 {
+		// Enable prompt caching on the last system block
+		system[len(system)-1].CacheControl = anthropic.CacheControlEphemeralParam{Type: "ephemeral"}
 		params.System = system
 	}
 
@@ -303,9 +305,11 @@ func parseClaudeResponse(resp *anthropic.Message) *LLMResponse {
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+			PromptTokens:            int(resp.Usage.InputTokens),
+			CompletionTokens:        int(resp.Usage.OutputTokens),
+			TotalTokens:             int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+			CacheCreationInputTokens: int(resp.Usage.CacheCreationInputTokens),
+			CacheReadInputTokens:     int(resp.Usage.CacheReadInputTokens),
 		},
 	}
 }

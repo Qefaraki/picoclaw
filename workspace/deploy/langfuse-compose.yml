@@ -1,0 +1,40 @@
+# Langfuse — LLM Observability for PicoClaw
+# Deploy on Coolify or standalone: docker compose -f langfuse-compose.yml up -d
+#
+# After startup, visit http://localhost:3030 to create an account.
+# Create a project and grab the public/secret keys for API integration.
+
+services:
+  langfuse-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:latest
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      - "3030:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3030
+      NEXTAUTH_SECRET: change-me-to-a-random-string
+      SALT: change-me-to-another-random-string
+      TELEMETRY_ENABLED: "true"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+
+volumes:
+  langfuse_pgdata:

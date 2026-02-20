@@ -17,9 +17,10 @@ var thinkTagRe = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
 
 // KnowledgeExtractor extracts and consolidates knowledge from conversations.
 type KnowledgeExtractor struct {
-	provider providers.LLMProvider
-	model    string
-	store    *VectorStore
+	provider      providers.LLMProvider
+	model         string
+	store         *VectorStore
+	relationStore *RelationStore
 }
 
 // ExtractedFact represents a single fact extracted from a conversation.
@@ -42,6 +43,11 @@ func NewKnowledgeExtractor(provider providers.LLMProvider, model string, store *
 		model:    model,
 		store:    store,
 	}
+}
+
+// SetRelationStore sets the relation store for graph-augmented memory extraction.
+func (ke *KnowledgeExtractor) SetRelationStore(rs *RelationStore) {
+	ke.relationStore = rs
 }
 
 // ExtractAndConsolidate runs the full Mem0-style pipeline:
@@ -86,6 +92,11 @@ func (ke *KnowledgeExtractor) ExtractAndConsolidate(ctx context.Context, userMsg
 			})
 		}
 	}
+
+	// Step 5: Extract relations (graph memory)
+	if ke.relationStore != nil {
+		go ke.extractRelations(context.Background(), userMsg, assistantMsg, specialist)
+	}
 }
 
 // ExtractFacts is a public version of extractFacts for use by the feed tool.
@@ -117,9 +128,26 @@ Assistant: %s
 
 Return ONLY valid JSON, no markdown fences or explanation.`
 
+// isTrivialMessage returns true for short, trivial messages not worth extracting.
+func isTrivialMessage(msg string) bool {
+	msg = strings.TrimSpace(strings.ToLower(msg))
+	if len(msg) < 10 {
+		return true
+	}
+	trivial := []string{"ok", "thanks", "thank you", "hi", "hello", "yes", "no",
+		"cool", "got it", "sure", "good", "great", "nice", "alright", "k", "yep",
+		"nope", "bye", "👍", "🙏", "done", "perfect", "noted"}
+	for _, t := range trivial {
+		if msg == t {
+			return true
+		}
+	}
+	return false
+}
+
 func (ke *KnowledgeExtractor) extractFacts(ctx context.Context, userMsg, assistantMsg string) ([]ExtractedFact, error) {
 	// Skip very short or trivial messages
-	if len(userMsg) < 10 {
+	if isTrivialMessage(userMsg) {
 		return nil, nil
 	}
 
@@ -369,6 +397,64 @@ func (ke *KnowledgeExtractor) ExtractAndConsolidateSpecialist(ctx context.Contex
 				"fact":  fact.Fact,
 			})
 		}
+	}
+}
+
+const relationExtractionPrompt = `Extract entity relationships from this conversation as (subject, predicate, object) triples.
+Focus on relationships between people, places, organizations, and concepts.
+
+Examples:
+[
+  {"s": "Muhammad", "p": "studies_at", "o": "QMUL"},
+  {"s": "Fahad", "p": "is_partner_in", "o": "Sikak"}
+]
+
+CONVERSATION:
+User: %s
+Assistant: %s
+
+Return ONLY a JSON array of triples. If no relationships found, return [].`
+
+func (ke *KnowledgeExtractor) extractRelations(ctx context.Context, userMsg, assistantMsg, specialist string) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	prompt := fmt.Sprintf(relationExtractionPrompt, truncate(userMsg, 1000), truncate(assistantMsg, 1000))
+
+	resp, err := ke.provider.Chat(ctx, []providers.Message{
+		{Role: "user", Content: prompt},
+	}, nil, ke.model, map[string]interface{}{
+		"max_tokens":  512,
+		"temperature": 0.1,
+	})
+	if err != nil {
+		return
+	}
+
+	content := strings.TrimSpace(resp.Content)
+	content = thinkTagRe.ReplaceAllString(content, "")
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	var relations []Relation
+	if err := json.Unmarshal([]byte(content), &relations); err != nil {
+		return
+	}
+
+	for _, r := range relations {
+		if r.Subject == "" || r.Predicate == "" || r.Object == "" {
+			continue
+		}
+		r.Specialist = specialist
+		ke.relationStore.Add(r)
+	}
+
+	if len(relations) > 0 {
+		logger.DebugCF("memory", "Extracted relations", map[string]interface{}{
+			"count": len(relations),
+		})
 	}
 }
 

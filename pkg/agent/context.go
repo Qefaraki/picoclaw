@@ -315,6 +315,12 @@ func (cb *ContextBuilder) BuildSpecialistMessages(history []providers.Message, s
 		}
 	}
 
+	// Include self-improvement learnings if available
+	learningsPath := filepath.Join(cb.workspace, "specialists", specialistName, "LEARNINGS.md")
+	if data, err := os.ReadFile(learningsPath); err == nil && len(data) > 0 {
+		systemPrompt += "\n\n## Self-Improvement Notes\n" + string(data)
+	}
+
 	// Full tool awareness — topic-linked specialists get the full tool registry
 	systemPrompt += "\n\n## Tools\nYou have access to all agent tools including: exec (run scripts), read_file, write_file, edit_file, list_dir, web_search, web_fetch, search_memory, message (send messages to user), and cron (schedule tasks). Use them as needed."
 

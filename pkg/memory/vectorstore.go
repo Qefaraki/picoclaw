@@ -239,18 +239,50 @@ func (vs *VectorStore) SearchKnowledge(ctx context.Context, query string, limit 
 
 // SearchKnowledgeScoped searches knowledge filtered by specialist.
 // If specialist is empty, returns all knowledge (global search).
+// When specialist is set, searches specialist-scoped first, then backfills
+// with global results for a "shared blackboard" effect.
 func (vs *VectorStore) SearchKnowledgeScoped(ctx context.Context, query string, limit int, specialist string) ([]MemoryResult, error) {
+	if vs.knowledge.Count() == 0 {
+		return nil, nil
+	}
+
+	if specialist == "" {
+		return vs.searchKnowledgeInternal(ctx, query, limit, nil)
+	}
+
+	// 1. Search specialist-scoped first
+	scoped, err := vs.searchKnowledgeInternal(ctx, query, limit, map[string]string{"specialist": specialist})
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. If fewer than limit, backfill with global (unscoped) results
+	if len(scoped) < limit {
+		remaining := limit - len(scoped)
+		global, _ := vs.searchKnowledgeInternal(ctx, query, remaining, nil)
+		// Deduplicate by ID
+		seen := make(map[string]bool)
+		for _, r := range scoped {
+			seen[r.ID] = true
+		}
+		for _, r := range global {
+			if !seen[r.ID] {
+				scoped = append(scoped, r)
+			}
+		}
+	}
+
+	return scoped, nil
+}
+
+// searchKnowledgeInternal is the core query implementation.
+func (vs *VectorStore) searchKnowledgeInternal(ctx context.Context, query string, limit int, where map[string]string) ([]MemoryResult, error) {
 	if vs.knowledge.Count() == 0 {
 		return nil, nil
 	}
 
 	if limit > vs.knowledge.Count() {
 		limit = vs.knowledge.Count()
-	}
-
-	var where map[string]string
-	if specialist != "" {
-		where = map[string]string{"specialist": specialist}
 	}
 
 	results, err := vs.knowledge.Query(ctx, query, limit, where, nil)

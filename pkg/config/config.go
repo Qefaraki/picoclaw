@@ -63,6 +63,7 @@ type AgentDefaults struct {
 	RestrictToWorkspace bool    `json:"restrict_to_workspace" env:"PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
 	Provider            string  `json:"provider" env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
 	Model               string  `json:"model" env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"`
+	CheapModel          string  `json:"cheap_model" env:"PICOCLAW_AGENTS_DEFAULTS_CHEAP_MODEL"`
 	MaxTokens           int     `json:"max_tokens" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	Temperature         float64 `json:"temperature" env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations   int     `json:"max_tool_iterations" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
@@ -222,8 +223,21 @@ type MoodleConfig struct {
 }
 
 type EmailConfig struct {
-	Enabled bool   `json:"enabled" env:"PICOCLAW_TOOLS_EMAIL_ENABLED"`
-	Address string `json:"address" env:"PICOCLAW_TOOLS_EMAIL_ADDRESS"`
+	Enabled  bool              `json:"enabled" env:"PICOCLAW_TOOLS_EMAIL_ENABLED"`
+	Address  string            `json:"address" env:"PICOCLAW_TOOLS_EMAIL_ADDRESS"`
+	Accounts []EmailAccount    `json:"accounts,omitempty"`
+	Monitor  EmailMonitorConfig `json:"monitor"`
+}
+
+type EmailAccount struct {
+	Address string `json:"address"`
+	Label   string `json:"label"` // e.g. "QMUL", "Personal"
+}
+
+type EmailMonitorConfig struct {
+	Enabled      bool   `json:"enabled" env:"PICOCLAW_TOOLS_EMAIL_MONITOR_ENABLED"`
+	IntervalMins int    `json:"interval_mins" env:"PICOCLAW_TOOLS_EMAIL_MONITOR_INTERVAL"`
+	DigestTime   string `json:"digest_time" env:"PICOCLAW_TOOLS_EMAIL_MONITOR_DIGEST_TIME"` // cron expr
 }
 
 type MemoryConfig struct {
@@ -232,11 +246,24 @@ type MemoryConfig struct {
 	EmbeddingModel   string `json:"embedding_model" env:"PICOCLAW_MEMORY_EMBEDDING_MODEL"`
 }
 
+type MCPConfig struct {
+	Servers []MCPServerConfig `json:"servers,omitempty"`
+}
+
+type MCPServerConfig struct {
+	Name    string            `json:"name"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env,omitempty"`
+	Enabled bool              `json:"enabled"`
+}
+
 type ToolsConfig struct {
 	Web    WebToolsConfig `json:"web"`
 	Moodle MoodleConfig   `json:"moodle"`
 	Email  EmailConfig    `json:"email"`
 	Memory MemoryConfig   `json:"memory"`
+	MCP    MCPConfig      `json:"mcp,omitempty"`
 }
 
 func DefaultConfig() *Config {
@@ -247,6 +274,7 @@ func DefaultConfig() *Config {
 				RestrictToWorkspace: true,
 				Provider:            "",
 				Model:               "glm-4.7",
+				CheapModel:          "claude-haiku-3-5-20241022",
 				MaxTokens:           8192,
 				Temperature:         0.4,
 				MaxToolIterations:   20,
