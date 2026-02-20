@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -298,19 +299,21 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		}
 
 		result := t.execTool.Execute(ctx, args)
-		var output string
 		if result.IsError {
-			output = fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM)
-		} else {
-			output = fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM)
+			t.msgBus.PublishOutbound(bus.OutboundMessage{
+				Channel:  channel,
+				ChatID:   chatID,
+				Content:  fmt.Sprintf("Error executing scheduled command: %s", result.ForLLM),
+				Metadata: job.Payload.Metadata,
+			})
+		} else if strings.TrimSpace(result.ForLLM) != "" && strings.TrimSpace(result.ForLLM) != "(no output)" {
+			t.msgBus.PublishOutbound(bus.OutboundMessage{
+				Channel:  channel,
+				ChatID:   chatID,
+				Content:  fmt.Sprintf("Scheduled command '%s' executed:\n%s", job.Payload.Command, result.ForLLM),
+				Metadata: job.Payload.Metadata,
+			})
 		}
-
-		t.msgBus.PublishOutbound(bus.OutboundMessage{
-			Channel:  channel,
-			ChatID:   chatID,
-			Content:  output,
-			Metadata: job.Payload.Metadata,
-		})
 		return "ok"
 	}
 
