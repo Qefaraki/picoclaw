@@ -1,0 +1,30 @@
+{
+  "monthly_budget_gbp": 1200,
+  "monthly_income_gbp": 1300,
+  "category_limits": {
+    "food_dining": 300,
+    "transport": 150,
+    "shopping": 200,
+    "subscriptions": 60,
+    "entertainment": 100,
+    "groceries": 250,
+    "phone": 40,
+    "storage": 90
+  },
+  "alert_at_pct": 80,
+  "recurring_monthly": {
+    "google_one": 40,
+    "apple_services": 45,
+    "anthropic_claude": 18,
+    "phone_jawwy_lyca_mobi": 35,
+    "the_box_co_storage": 75
+  },
+  "recurring_total_gbp": 213,
+  "red_flags": [
+    "Google Cloud £344 charge (Jan 2026) — unexplained, investigate",
+    "Apple £115 charge (Jan 27) — unusually large, review",
+    "3 phone providers (Jawwy, LycaMobile, Mobimatter) — consolidate",
+    "Amazon/Temu spending: £965 in 3 months"
+  ],
+  "last_updated": "2026-02-20"
+}

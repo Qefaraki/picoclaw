@@ -131,6 +131,7 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 			Token:        cfg.Tools.Moodle.Token,
 			M365Username: cfg.Tools.Moodle.M365Username,
 			M365Password: cfg.Tools.Moodle.M365Password,
+			Workspace:    workspace,
 			OnTokenRefresh: func(newToken string) {
 				cfg.Tools.Moodle.Token = newToken
 				logger.Info("Moodle token refreshed via SSO")
@@ -157,11 +158,12 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	// Message tool - available to both agent and subagent
 	// Subagent uses it to communicate directly with user
 	messageTool := tools.NewMessageTool()
-	messageTool.SetSendCallback(func(channel, chatID, content string) error {
+	messageTool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
 		msgBus.PublishOutbound(bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: content,
+			Channel:  channel,
+			ChatID:   chatID,
+			Content:  content,
+			Metadata: metadata,
 		})
 		return nil
 	})
@@ -170,33 +172,11 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	return registry
 }
 
-// createSpecialistToolRegistry creates a restricted tool registry for specialist subagents.
-// Only read-only tools are included — no exec, write, edit, message, email, moodle, etc.
-func createSpecialistToolRegistry(workspace string, cfg *config.Config, vectorStore *memory.VectorStore) *tools.ToolRegistry {
-	registry := tools.NewToolRegistry()
-
-	// Read-only file tools
-	registry.Register(tools.NewReadFileTool(workspace, true))
-	registry.Register(tools.NewListDirTool(workspace, true))
-
-	// Web tools (read-only)
-	if searchTool := tools.NewWebSearchTool(tools.WebSearchToolOptions{
-		BraveAPIKey:          cfg.Tools.Web.Brave.APIKey,
-		BraveMaxResults:      cfg.Tools.Web.Brave.MaxResults,
-		BraveEnabled:         cfg.Tools.Web.Brave.Enabled,
-		DuckDuckGoMaxResults: cfg.Tools.Web.DuckDuckGo.MaxResults,
-		DuckDuckGoEnabled:    cfg.Tools.Web.DuckDuckGo.Enabled,
-	}); searchTool != nil {
-		registry.Register(searchTool)
-	}
-	registry.Register(tools.NewWebFetchTool(50000))
-
-	// Semantic memory search (read-only)
-	if vectorStore != nil {
-		registry.Register(tools.NewMemorySearchTool(vectorStore))
-	}
-
-	return registry
+// createSpecialistToolRegistry creates a tool registry for specialist subagents.
+// Specialists get the same tools as the main agent (workspace-restricted) so they can
+// read, write, execute scripts, send messages, and use all available capabilities.
+func createSpecialistToolRegistry(workspace string, cfg *config.Config, msgBus *bus.MessageBus, vectorStore *memory.VectorStore) *tools.ToolRegistry {
+	return createToolRegistry(workspace, true, cfg, msgBus, vectorStore)
 }
 
 func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers.LLMProvider) *AgentLoop {
@@ -248,9 +228,9 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	subagentTool := tools.NewSubagentTool(subagentManager)
 	toolsRegistry.Register(subagentTool)
 
-	// Register specialist tools (with restricted tool registry)
+	// Register specialist tools (full tool access, workspace-restricted)
 	specialistLoader := specialists.NewSpecialistLoader(workspace)
-	specialistTools := createSpecialistToolRegistry(workspace, cfg, vectorStore)
+	specialistTools := createSpecialistToolRegistry(workspace, cfg, msgBus, vectorStore)
 	consultTool := tools.NewConsultSpecialistTool(tools.ConsultSpecialistConfig{
 		Loader:      specialistLoader,
 		Provider:    provider,
@@ -424,16 +404,17 @@ func (al *AgentLoop) RecordLastChatID(chatID string) error {
 }
 
 func (al *AgentLoop) ProcessDirect(ctx context.Context, content, sessionKey string) (string, error) {
-	return al.ProcessDirectWithChannel(ctx, content, sessionKey, "cli", "direct")
+	return al.ProcessDirectWithChannel(ctx, content, sessionKey, "cli", "direct", nil)
 }
 
-func (al *AgentLoop) ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error) {
+func (al *AgentLoop) ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string, metadata map[string]string) (string, error) {
 	msg := bus.InboundMessage{
 		Channel:    channel,
 		SenderID:   "cron",
 		ChatID:     chatID,
 		Content:    content,
 		SessionKey: sessionKey,
+		Metadata:   metadata,
 	}
 
 	return al.processMessage(ctx, msg)
@@ -447,7 +428,7 @@ func (al *AgentLoop) ProcessHeartbeat(ctx context.Context, content, channel, cha
 		Channel:         channel,
 		ChatID:          chatID,
 		UserMessage:     content,
-		DefaultResponse: "I've completed processing but have no response to give.",
+		DefaultResponse: "Sorry, I wasn't able to come up with a response. Could you try rephrasing?",
 		EnableSummary:   false,
 		SendResponse:    false,
 		NoHistory:       true, // Don't load session history for heartbeat
@@ -498,7 +479,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ChatID:          msg.ChatID,
 		UserMessage:     msg.Content,
 		Media:           msg.Media,
-		DefaultResponse: "I've completed processing but have no response to give.",
+		DefaultResponse: "Sorry, I wasn't able to come up with a response. Could you try rephrasing?",
 		EnableSummary:   true,
 		SendResponse:    false,
 		Specialist:      specialist,
@@ -692,8 +673,10 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		)
 	}
 
-	// 3. Save user message to session
-	al.sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
+	// 3. Save user message to session (skip for NoHistory to prevent unbounded growth)
+	if !opts.NoHistory {
+		al.sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
+	}
 
 	// 4. Run LLM iteration loop
 	finalContent, iteration, usedSpecialist, err := al.runLLMIteration(ctx, messages, opts)
@@ -709,9 +692,11 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		finalContent = opts.DefaultResponse
 	}
 
-	// 6. Save final assistant message to session
-	al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
-	al.sessions.Save(opts.SessionKey)
+	// 6. Save final assistant message to session (skip for NoHistory to prevent unbounded growth)
+	if !opts.NoHistory {
+		al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
+		al.sessions.Save(opts.SessionKey)
+	}
 
 	// 7. Async: index conversation and extract knowledge
 	if al.vectorStore != nil && !opts.NoHistory {
@@ -857,7 +842,9 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			injected := al.drainInterrupts(messages, opts.SessionKey)
 			if len(injected) > len(messages) {
 				// New messages were injected — save and send current answer, then continue
-				al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
+				if !opts.NoHistory {
+					al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
+				}
 				al.bus.PublishOutbound(bus.OutboundMessage{
 					Channel:  opts.Channel,
 					ChatID:   opts.ChatID,
@@ -910,8 +897,10 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		}
 		messages = append(messages, assistantMsg)
 
-		// Save assistant message with tool calls to session
-		al.sessions.AddFullMessage(opts.SessionKey, assistantMsg)
+		// Save assistant message with tool calls to session (skip for NoHistory)
+		if !opts.NoHistory {
+			al.sessions.AddFullMessage(opts.SessionKey, assistantMsg)
+		}
 
 		// Execute tool calls
 		for _, tc := range response.ToolCalls {
@@ -969,8 +958,10 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			}
 			messages = append(messages, toolResultMsg)
 
-			// Save tool result message to session
-			al.sessions.AddFullMessage(opts.SessionKey, toolResultMsg)
+			// Save tool result message to session (skip for NoHistory)
+			if !opts.NoHistory {
+				al.sessions.AddFullMessage(opts.SessionKey, toolResultMsg)
+			}
 		}
 	}
 
@@ -1182,9 +1173,9 @@ func (al *AgentLoop) summarizeSession(sessionKey string) {
 			"temperature": 0.3,
 		})
 		if err == nil {
-			finalSummary = resp.Content
+			finalSummary = stripThinkingTags(resp.Content)
 		} else {
-			finalSummary = s1 + " " + s2
+			finalSummary = stripThinkingTags(s1) + " " + stripThinkingTags(s2)
 		}
 	} else {
 		finalSummary, _ = al.summarizeBatch(ctx, validMessages, summary)
@@ -1219,7 +1210,7 @@ func (al *AgentLoop) summarizeBatch(ctx context.Context, batch []providers.Messa
 	if err != nil {
 		return "", err
 	}
-	return response.Content, nil
+	return stripThinkingTags(response.Content), nil
 }
 
 // estimateTokens estimates the number of tokens in a message list.

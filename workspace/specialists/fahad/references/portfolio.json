@@ -1,14 +1,155 @@
 {
-  "holdings": [],
+  "holdings": [
+    {
+      "symbol": "GOLD_PHYSICAL",
+      "name": "Physical Gold Bars (24K)",
+      "type": "commodity",
+      "quantity_grams": 93.3,
+      "quantity_troy_oz": 3.0,
+      "avg_cost_per_gram": 508.04,
+      "total_cost": 47400,
+      "currency": "SAR",
+      "date_added": "2025-12-06",
+      "vendor": "Al-Jurifani Trading Company, Qassim",
+      "invoice": "2694",
+      "storage": "Physical possession, Saudi Arabia",
+      "price_tracker": "GC=F",
+      "notes": "3 bars, 24 karat, 93.3g total. Invoice from Al-Jurifani gold market Buraydah."
+    },
+    {
+      "symbol": "SILVER_PHYSICAL",
+      "name": "Physical Silver Bars (999)",
+      "type": "commodity",
+      "quantity_grams": 2000,
+      "quantity_troy_oz": 64.3,
+      "avg_cost_per_gram": 7.85,
+      "total_cost": 15700,
+      "currency": "SAR",
+      "date_added": "2025-12-06",
+      "vendor": "Al-Jurifani Trading Company, Qassim",
+      "invoice": "2694",
+      "storage": "Physical possession, Saudi Arabia",
+      "price_tracker": "SI=F",
+      "notes": "2 bars, 999 purity (99.9%), 2kg total. Same invoice as gold."
+    },
+    {
+      "symbol": "SILVER_REVOLUT",
+      "name": "Digital Silver (Revolut XAG)",
+      "type": "commodity",
+      "total_cost": 1000,
+      "currency": "GBP",
+      "date_added": "2026-01-29",
+      "platform": "Revolut",
+      "price_tracker": "SI=F",
+      "notes": "£1,000 exchanged to XAG on Revolut. Performance: was down initially, net positive overall."
+    },
+    {
+      "symbol": "AHDAF",
+      "name": "AHDAF Summer Camp Company",
+      "type": "private_equity",
+      "ownership_pct": 20,
+      "total_cost": 300000,
+      "estimated_company_value": 1500000,
+      "estimated_stake_value": 300000,
+      "currency": "SAR",
+      "date_added": "2023-02-01",
+      "role": "Passive investor",
+      "liquidity": "Illiquid",
+      "notes": "Summer camp company. Owned since Feb 2023. Stake increased from 15% to 20% (same valuation ~300k). Long-term hold. Estimated value 400-450k SAR after illiquidity premium."
+    },
+    {
+      "symbol": "SIKAK",
+      "name": "Sikak Company",
+      "type": "private_equity",
+      "ownership_pct": 1,
+      "total_cost": 120000,
+      "estimated_company_value": 12000000,
+      "estimated_stake_value": 120000,
+      "currency": "SAR",
+      "date_added": "2025-12-01",
+      "how_acquired": "Converted from business partner's 100,000 SAR debt (20% premium)",
+      "liquidity": "Illiquid",
+      "projected_value_18mo": 200000,
+      "notes": "1% of Sikak. Company valued at 10-12M SAR, projected 20M in 18 months. 'Father' = business partner, NOT biological father."
+    }
+  ],
+  "transactions": [
+    {
+      "date": "2025-12-06",
+      "symbol": "GOLD_PHYSICAL",
+      "action": "buy",
+      "quantity": "93.3g (3 bars)",
+      "price": "508.04 SAR/gram",
+      "total": 47400,
+      "currency": "SAR"
+    },
+    {
+      "date": "2025-12-06",
+      "symbol": "SILVER_PHYSICAL",
+      "action": "buy",
+      "quantity": "2000g (2 bars)",
+      "price": "7.85 SAR/gram",
+      "total": 15700,
+      "currency": "SAR"
+    },
+    {
+      "date": "2025-12-01",
+      "symbol": "SIKAK",
+      "action": "buy",
+      "quantity": "1%",
+      "price": "120,000 SAR (converted from 100k debt + 20% premium)",
+      "total": 120000,
+      "currency": "SAR"
+    },
+    {
+      "date": "2026-01-29",
+      "symbol": "SILVER_REVOLUT",
+      "action": "buy",
+      "quantity": "XAG allocation",
+      "price": "£1,000",
+      "total": 1000,
+      "currency": "GBP"
+    }
+  ],
   "cash": {
-    "SAR": 0,
-    "GBP": 0,
+    "SAR": 13529,
+    "GBP": 1633,
     "USD": 0
+  },
+  "cash_detail": {
+    "SNB_AlAhli": { "balance": 3848.39, "currency": "SAR", "type": "current" },
+    "Al_Rajhi": { "balance": 9680.90, "currency": "SAR", "type": "current" },
+    "Revolut": { "balance": 1632.95, "currency": "GBP", "type": "personal" }
+  },
+  "net_worth_summary": {
+    "liquid_SAR": 21305,
+    "liquid_GBP": 4474,
+    "metals_SAR": 67860,
+    "equity_SAR": 420000,
+    "total_SAR": 509165,
+    "total_GBP": 106925,
+    "liquidity_pct": 4.0,
+    "as_of": "2026-02-17"
   },
   "savings_goals": [],
   "benchmarks": {
     "saudi": "^TASI.SR",
-    "us": "^GSPC"
+    "us": "^GSPC",
+    "gold": "GC=F",
+    "silver": "SI=F"
   },
-  "last_updated": ""
+  "income": {
+    "source": "Saudi Educational scholarship/stipend",
+    "monthly_gbp": 1300,
+    "payment_day": "23rd-26th",
+    "destination": "Revolut"
+  },
+  "key_notes": [
+    "Liquidity is LOW — only 4% of net worth is cash",
+    "'Father' in Sikak context = business partner, NOT biological father",
+    "Physical gold/silver stored in Saudi Arabia",
+    "AHDAF illiquidity premium estimates stake at 400-450k SAR",
+    "Sikak projected to double in 18 months (company to 20M SAR)"
+  ],
+  "last_updated": "2026-02-20"
 }
