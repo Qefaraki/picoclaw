@@ -41,7 +41,7 @@ func NewSubagentManager(provider providers.LLMProvider, defaultModel, workspace 
 		bus:           bus,
 		workspace:     workspace,
 		tools:         NewToolRegistry(),
-		maxIterations: 10,
+		maxIterations: 20,
 		nextID:        1,
 	}
 }
@@ -93,9 +93,11 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 	task.Created = time.Now().UnixMilli()
 
 	// Build system prompt for subagent
-	systemPrompt := `You are a subagent. Complete the given task independently and report the result.
-You have access to tools - use them as needed to complete your task.
-After completing the task, provide a clear summary of what was done.`
+	systemPrompt := `You are a subagent executing a task autonomously. Rules:
+- Use tools aggressively — read files, run scripts, fetch data. Don't speculate.
+- Chain the FULL task end-to-end. Don't stop halfway.
+- If something fails, debug it and try a different approach. Don't just report failure.
+- Deliver a complete, concise result when done.`
 
 	messages := []providers.Message{
 		{
@@ -131,8 +133,8 @@ After completing the task, provide a clear summary of what was done.`
 		Tools:         tools,
 		MaxIterations: maxIter,
 		LLMOptions: map[string]any{
-			"max_tokens":  4096,
-			"temperature": 0.7,
+			"max_tokens":  8192,
+			"temperature": 0.4,
 		},
 	}, messages, task.OriginChannel, task.OriginChatID)
 
@@ -268,7 +270,7 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]interface{})
 	messages := []providers.Message{
 		{
 			Role:    "system",
-			Content: "You are a subagent. Complete the given task independently and provide a clear, concise result.",
+			Content: "You are a subagent executing a task autonomously. Use tools aggressively — read files, run scripts, fetch data. Chain the full task end-to-end. If something fails, debug and retry. Deliver a complete result.",
 		},
 		{
 			Role:    "user",
@@ -289,8 +291,8 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]interface{})
 		Tools:         tools,
 		MaxIterations: maxIter,
 		LLMOptions: map[string]any{
-			"max_tokens":  4096,
-			"temperature": 0.7,
+			"max_tokens":  8192,
+			"temperature": 0.4,
 		},
 	}, messages, t.originChannel, t.originChatID)
 

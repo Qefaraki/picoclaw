@@ -24,7 +24,7 @@ func (t *MessageTool) Name() string {
 }
 
 func (t *MessageTool) Description() string {
-	return "Send a message to user on a chat channel. Use this when you want to communicate something. For Telegram forum topics, include thread_id to target a specific topic."
+	return "Send a message to the user on a chat channel. Use this to deliver results, updates, or alerts. For Telegram forum topics, include thread_id to target a specific topic."
 }
 
 func (t *MessageTool) Parameters() map[string]interface{} {

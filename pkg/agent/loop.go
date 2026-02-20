@@ -428,7 +428,7 @@ func (al *AgentLoop) ProcessHeartbeat(ctx context.Context, content, channel, cha
 		Channel:         channel,
 		ChatID:          chatID,
 		UserMessage:     content,
-		DefaultResponse: "Sorry, I wasn't able to come up with a response. Could you try rephrasing?",
+		DefaultResponse: "I hit an issue processing that. Let me try a different approach — could you give me a bit more context?",
 		EnableSummary:   false,
 		SendResponse:    false,
 		NoHistory:       true, // Don't load session history for heartbeat
@@ -479,7 +479,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ChatID:          msg.ChatID,
 		UserMessage:     msg.Content,
 		Media:           msg.Media,
-		DefaultResponse: "Sorry, I wasn't able to come up with a response. Could you try rephrasing?",
+		DefaultResponse: "I hit an issue processing that. Let me try a different approach — could you give me a bit more context?",
 		EnableSummary:   true,
 		SendResponse:    false,
 		Specialist:      specialist,
@@ -1047,10 +1047,10 @@ func (al *AgentLoop) updateSessionContext(sessionKey string) {
 		history := al.sessions.GetHistory(sessionKey)
 		if len(history) > 0 {
 			var parts []string
-			// Take last 6 messages max for a quick recap
+			// Take last 12 messages for a meaningful recap
 			start := 0
-			if len(history) > 6 {
-				start = len(history) - 6
+			if len(history) > 12 {
+				start = len(history) - 12
 			}
 			for _, m := range history[start:] {
 				if m.Role == "user" || m.Role == "assistant" {
@@ -1087,7 +1087,7 @@ func (al *AgentLoop) maybeSummarize(sessionKey string) {
 	tokenEstimate := al.estimateTokens(newHistory)
 	threshold := al.contextWindow * 75 / 100
 
-	if len(newHistory) > 20 || tokenEstimate > threshold {
+	if len(newHistory) > 40 || tokenEstimate > threshold {
 		if _, loading := al.summarizing.LoadOrStore(sessionKey, true); !loading {
 			go func() {
 				defer al.summarizing.Delete(sessionKey)

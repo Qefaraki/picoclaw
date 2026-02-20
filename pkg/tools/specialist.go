@@ -72,7 +72,7 @@ func NewConsultSpecialistTool(cfg ConsultSpecialistConfig) *ConsultSpecialistToo
 func (t *ConsultSpecialistTool) Name() string { return "consult_specialist" }
 
 func (t *ConsultSpecialistTool) Description() string {
-	desc := "Consult a domain specialist for focused expertise. The specialist has its own persona, scoped memory, and learns from each consultation."
+	desc := "Delegate to a domain specialist for expert analysis. Use this instead of handling specialized questions yourself. The specialist has its own persona, scoped memory, and full tool access."
 
 	all := t.loader.ListSpecialists()
 	if len(all) > 0 {
@@ -331,7 +331,7 @@ Return ONLY the file content, no explanation.`, name, description, name, descrip
 		{Role: "user", Content: personaPrompt},
 	}, nil, t.model, map[string]interface{}{
 		"max_tokens":  1024,
-		"temperature": 0.7,
+		"temperature": 0.4,
 	})
 	if err != nil {
 		// Fallback: generate a basic persona without LLM
