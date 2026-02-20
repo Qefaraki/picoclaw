@@ -17,14 +17,14 @@ if [ ! -f "$CSV_FILE" ]; then
     exit 1
 fi
 
-python3 << 'PYEOF'
+python3 - "$CSV_FILE" << 'PYEOF'
 import csv
 import json
 import sys
 from collections import defaultdict
 from datetime import datetime
 
-csv_file = sys.argv[1] if len(sys.argv) > 1 else ""
+csv_file = sys.argv[1]
 
 # Category mapping for common merchants
 CATEGORY_MAP = {
@@ -59,7 +59,7 @@ try:
         for row in reader:
             # Try common CSV column names
             amount = None
-            for col in ['Amount', 'amount', 'Value', 'value', 'Completed (GBP)', 'Amount (GBP)']:
+            for col in ['Amount', 'amount', 'Value', 'value', 'Completed (GBP)', 'Amount (GBP)', 'Amount_GBP', 'Amount_Original']:
                 if col in row and row[col]:
                     try:
                         amount = float(row[col].replace(',', '').replace('£', '').replace('$', '').replace('﷼', ''))

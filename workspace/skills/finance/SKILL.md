@@ -44,7 +44,14 @@ All scripts are in `workspace/skills/finance/scripts/`. Run them via the `exec` 
 
 | Script | Usage | Description |
 |--------|-------|-------------|
-| `economic-calendar.sh` | `bash economic-calendar.sh` | Economic events + earnings calendar from Finnhub |
+| `economic-calendar.sh` | `bash economic-calendar.sh` | Economic events (Forex Factory, free) + earnings (Finnhub free tier, key optional) |
+
+### Portfolio & Analysis
+
+| Script | Usage | Description |
+|--------|-------|-------------|
+| `portfolio-value.sh` | `bash portfolio-value.sh` | Portfolio valuation: current prices, unrealized P&L, benchmark comparison |
+| `price-history.sh` | `bash price-history.sh SYMBOL [range] [interval]` | Historical OHLCV data with moving averages (20/50/200), support/resistance. Defaults: 6mo daily |
 
 ### Expense Tracking
 
@@ -76,7 +83,8 @@ All in `workspace/skills/finance/references/`:
 | Senate Stock Watcher | None | `senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json` |
 | SEC EDGAR | None | `efts.sec.gov/LATEST/search-index?q=...&dateRange=...&forms=13F-HR` |
 | Dataroma | None | `dataroma.com/m/holdings.php?m=...` |
-| Finnhub | Free key | `finnhub.io/api/v1/calendar/economic` |
+| Forex Factory | None | `nfs.faireconomy.media/ff_calendar_thisweek.json` |
+| Finnhub | Free key (optional) | `finnhub.io/api/v1/calendar/earnings` |
 | RSS Feeds | None | Various (see feeds.json) |
 
 ## Cron Jobs (set up via Saleh)

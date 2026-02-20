@@ -146,7 +146,13 @@ func (ke *KnowledgeExtractor) extractFacts(ctx context.Context, userMsg, assista
 
 	var facts []ExtractedFact
 	if err := json.Unmarshal([]byte(content), &facts); err != nil {
-		return nil, fmt.Errorf("parse extracted facts: %w (response: %s)", err, truncate(content, 200))
+		// Fallback: try parsing as a single object (some models return {..} instead of [{..}])
+		var single ExtractedFact
+		if err2 := json.Unmarshal([]byte(content), &single); err2 == nil && single.Fact != "" {
+			facts = []ExtractedFact{single}
+		} else {
+			return nil, fmt.Errorf("parse extracted facts: %w (response: %s)", err, truncate(content, 200))
+		}
 	}
 
 	return facts, nil
@@ -317,7 +323,13 @@ func (ke *KnowledgeExtractor) ExtractSpecialistFacts(ctx context.Context, conten
 
 	var facts []ExtractedFact
 	if err := json.Unmarshal([]byte(c), &facts); err != nil {
-		return nil, fmt.Errorf("parse specialist facts: %w (response: %s)", err, truncate(c, 200))
+		// Fallback: try parsing as a single object (MiniMax sometimes returns {..} instead of [{..}])
+		var single ExtractedFact
+		if err2 := json.Unmarshal([]byte(c), &single); err2 == nil && single.Fact != "" {
+			facts = []ExtractedFact{single}
+		} else {
+			return nil, fmt.Errorf("parse specialist facts: %w (response: %s)", err, truncate(c, 200))
+		}
 	}
 
 	return facts, nil

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SPECIALIST_DIR="$(cd "$SCRIPT_DIR/../../specialists/fahad/references" 2>/dev/null && pwd || echo "")"
+SPECIALIST_DIR="$(cd "$SCRIPT_DIR/../../../specialists/fahad/references" 2>/dev/null && pwd || echo "")"
 STATE_FILE="${SPECIALIST_DIR:+$SPECIALIST_DIR/congress-state.json}"
 
 SHOW_ALL=false
@@ -14,7 +14,7 @@ SHOW_ALL=false
 
 DAYS_BACK=30
 MIN_AMOUNT=50000
-CUTOFF_DATE=$(date -u -v-${DAYS_BACK}d +%Y-%m-%d 2>/dev/null || date -u -d "-${DAYS_BACK} days" +%Y-%m-%d 2>/dev/null || echo "2025-01-01")
+CUTOFF_DATE=$(date -u -v-${DAYS_BACK}d +%Y-%m-%d 2>/dev/null || date -u -d "-${DAYS_BACK} days" +%Y-%m-%d 2>/dev/null || python3 -c "from datetime import datetime,timedelta;print((datetime.utcnow()-timedelta(days=$DAYS_BACK)).strftime('%Y-%m-%d'))" 2>/dev/null || echo "2025-01-01")
 
 # Key politicians to always flag
 KEY_POLITICIANS='["Nancy Pelosi", "Dan Crenshaw", "Tommy Tuberville", "Josh Gottheimer", "Mark Green", "Michael McCaul", "Pat Fallon", "Marjorie Taylor Greene"]'
@@ -22,7 +22,7 @@ KEY_POLITICIANS='["Nancy Pelosi", "Dan Crenshaw", "Tommy Tuberville", "Josh Gott
 echo '{"congress_trades": {'
 
 # --- House trades ---
-echo '"house": ['
+echo '"house": '
 HOUSE_DATA=$(curl -s --max-time 30 \
     "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json" 2>/dev/null || echo "[]")
 
@@ -48,12 +48,14 @@ if [ "$HOUSE_DATA" != "[]" ] && [ -n "$HOUSE_DATA" ]; then
             }
         ] | sort_by(.date) | reverse | .[0:50]
     ' 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
 
-echo '],'
+echo ','
 
 # --- Senate trades ---
-echo '"senate": ['
+echo '"senate": '
 SENATE_DATA=$(curl -s --max-time 30 \
     "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json" 2>/dev/null || echo "[]")
 
@@ -61,7 +63,7 @@ if [ "$SENATE_DATA" != "[]" ] && [ -n "$SENATE_DATA" ]; then
     echo "$SENATE_DATA" | jq --arg cutoff "$CUTOFF_DATE" --argjson min_amt "$MIN_AMOUNT" --argjson key "$KEY_POLITICIANS" '
         [.[] |
             select(.transaction_date >= $cutoff) |
-            (.amount | gsub("\\$|,| "; "") | split("-") | .[0] | tonumber) as $amt |
+            (.amount | gsub("\\$|,"; "") | split(" - ") | .[0] | ltrimstr(" ") | tonumber) as $amt |
             select($amt >= $min_amt or (.senator | IN($key[]))) |
             {
                 politician: .senator,
@@ -78,9 +80,9 @@ if [ "$SENATE_DATA" != "[]" ] && [ -n "$SENATE_DATA" ]; then
             }
         ] | sort_by(.date) | reverse | .[0:50]
     ' 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
-
-echo ']'
 
 echo '},'
 echo "\"cutoff_date\": \"$CUTOFF_DATE\","

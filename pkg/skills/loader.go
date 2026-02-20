@@ -191,16 +191,55 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 		escapedDesc := escapeXML(s.Description)
 		escapedPath := escapeXML(s.Path)
 
-		lines = append(lines, fmt.Sprintf("  <skill>"))
+		lines = append(lines, "  <skill>")
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
+
+		// Extract key actions from SKILL.md so agent knows capabilities without reading the file
+		actions := sl.extractSkillActions(s.Path)
+		if actions != "" {
+			lines = append(lines, fmt.Sprintf("    <actions>%s</actions>", escapeXML(actions)))
+		}
+
 		lines = append(lines, "  </skill>")
 	}
 	lines = append(lines, "</skills>")
 
 	return strings.Join(lines, "\n")
+}
+
+// extractSkillActions extracts script/command names from SKILL.md tables.
+// Looks for markdown table rows with script names (e.g., "| `script.sh` | ...").
+func (sl *SkillsLoader) extractSkillActions(skillPath string) string {
+	content, err := os.ReadFile(skillPath)
+	if err != nil {
+		return ""
+	}
+
+	body := sl.stripFrontmatter(string(content))
+
+	// Match table rows like: | `script-name.sh` | `bash script-name.sh [args]` | description |
+	// Extract the script name and a brief description
+	tableRowRe := regexp.MustCompile("(?m)^\\|\\s*`([^`]+)`\\s*\\|\\s*`([^`]*)`\\s*\\|\\s*([^|]+)\\|")
+	matches := tableRowRe.FindAllStringSubmatch(body, -1)
+
+	if len(matches) == 0 {
+		return ""
+	}
+
+	var actions []string
+	for _, m := range matches {
+		script := strings.TrimSpace(m[1])
+		desc := strings.TrimSpace(m[3])
+		if script == "" || script == "Script" {
+			continue // skip header rows
+		}
+		actions = append(actions, fmt.Sprintf("%s: %s", script, desc))
+	}
+
+	return strings.Join(actions, "; ")
 }
 
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {

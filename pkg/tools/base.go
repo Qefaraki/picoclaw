@@ -24,6 +24,13 @@ type MetadataAwareTool interface {
 	SetMetadata(metadata map[string]string)
 }
 
+// SessionAwareTool is an optional interface that tools can implement
+// to receive the current conversation summary for context continuity.
+type SessionAwareTool interface {
+	Tool
+	SetSessionSummary(summary string)
+}
+
 // AsyncCallback is a function type that async tools use to notify completion.
 // When an async tool finishes its work, it calls this callback with the result.
 //

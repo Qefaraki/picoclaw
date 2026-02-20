@@ -265,7 +265,11 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 				}
 			} else {
 				part, err := media.ProcessFile(localPath)
-				if err == nil && part != nil {
+				if err != nil {
+					logger.ErrorCF("slack", "Failed to process media file", map[string]interface{}{
+						"path": localPath, "error": err.Error(),
+					})
+				} else if part != nil {
 					mediaParts = append(mediaParts, *part)
 				}
 				content += fmt.Sprintf("\n[file: %s]", file.Name)

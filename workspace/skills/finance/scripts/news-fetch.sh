@@ -40,8 +40,8 @@ case "$CATEGORY" in
         ;;
 esac
 
-echo '{"articles": ['
-FIRST=true
+# Collect all articles into a temp file to avoid subshell variable issues
+ALL_ARTICLES=""
 
 while IFS= read -r FEED_URL; do
     [ -z "$FEED_URL" ] && continue
@@ -52,7 +52,7 @@ while IFS= read -r FEED_URL; do
 
     # Parse RSS items (extract title, link, pubDate) using basic text processing
     # This handles both RSS and Atom feeds
-    echo "$RSS" | python3 -c "
+    FEED_ARTICLES=$(echo "$RSS" | python3 -c "
 import sys, xml.etree.ElementTree as ET
 from datetime import datetime
 
@@ -86,18 +86,34 @@ if not items:
 import json
 for title, link, pub in items:
     print(json.dumps({'title': title, 'url': link, 'published': pub, 'source': '$FEED_URL'.split('/')[2]}))
-" 2>/dev/null | while IFS= read -r ARTICLE; do
+" 2>/dev/null || echo "")
+
+    if [ -n "$FEED_ARTICLES" ]; then
+        if [ -n "$ALL_ARTICLES" ]; then
+            ALL_ARTICLES="${ALL_ARTICLES}
+${FEED_ARTICLES}"
+        else
+            ALL_ARTICLES="$FEED_ARTICLES"
+        fi
+    fi
+
+    sleep 0.3
+done <<< "$FEEDS"
+
+# Output collected articles as JSON array with proper commas
+echo '{"articles": ['
+FIRST=true
+if [ -n "$ALL_ARTICLES" ]; then
+    while IFS= read -r ARTICLE; do
+        [ -z "$ARTICLE" ] && continue
         if [ "$FIRST" = true ]; then
             FIRST=false
             echo "$ARTICLE"
         else
             echo ",$ARTICLE"
         fi
-    done
-
-    sleep 0.3
-done <<< "$FEEDS"
-
+    done <<< "$ALL_ARTICLES"
+fi
 echo '],'
 echo "\"category\": \"$CATEGORY\","
 echo "\"fetched_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""

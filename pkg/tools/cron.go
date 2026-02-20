@@ -13,7 +13,7 @@ import (
 
 // JobExecutor is the interface for executing cron jobs through the agent
 type JobExecutor interface {
-	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string) (string, error)
+	ProcessDirectWithChannel(ctx context.Context, content, sessionKey, channel, chatID string, metadata map[string]string) (string, error)
 }
 
 // CronTool provides scheduling capabilities for the agent
@@ -84,6 +84,10 @@ func (t *CronTool) Parameters() map[string]interface{} {
 			"deliver": map[string]interface{}{
 				"type":        "boolean",
 				"description": "If true, send message directly to channel. If false, let agent process message (for complex tasks). Default: true",
+			},
+			"metadata": map[string]interface{}{
+				"type":        "object",
+				"description": "Optional metadata to pass through to the message (e.g., {\"thread_id\": \"35\"} for forum topic routing). This enables cron jobs to target specific forum topics or specialist modes.",
 			},
 		},
 		"required": []string{"action"},
@@ -195,9 +199,23 @@ func (t *CronTool) addJob(args map[string]interface{}) *ToolResult {
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
 	}
 
+	// Set command if present
 	if command != "" {
 		job.Payload.Command = command
-		// Need to save the updated payload
+	}
+
+	// Set metadata if present (e.g., thread_id for forum topic routing)
+	if md, ok := args["metadata"].(map[string]interface{}); ok && len(md) > 0 {
+		job.Payload.Metadata = make(map[string]string)
+		for k, v := range md {
+			if s, ok := v.(string); ok {
+				job.Payload.Metadata[k] = s
+			}
+		}
+	}
+
+	// Save updated payload if command or metadata was added
+	if command != "" || job.Payload.Metadata != nil {
 		t.cronService.UpdateJob(job)
 	}
 
@@ -288,9 +306,10 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		}
 
 		t.msgBus.PublishOutbound(bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: output,
+			Channel:  channel,
+			ChatID:   chatID,
+			Content:  output,
+			Metadata: job.Payload.Metadata,
 		})
 		return "ok"
 	}
@@ -298,9 +317,10 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	// If deliver=true, send message directly without agent processing
 	if job.Payload.Deliver {
 		t.msgBus.PublishOutbound(bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: job.Payload.Message,
+			Channel:  channel,
+			ChatID:   chatID,
+			Content:  job.Payload.Message,
+			Metadata: job.Payload.Metadata,
 		})
 		return "ok"
 	}
@@ -308,13 +328,14 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	// For deliver=false, process through agent (for complex tasks)
 	sessionKey := fmt.Sprintf("cron-%s", job.ID)
 
-	// Call agent with job's message
+	// Call agent with job's message (pass metadata for topic routing)
 	response, err := t.executor.ProcessDirectWithChannel(
 		ctx,
 		job.Payload.Message,
 		sessionKey,
 		channel,
 		chatID,
+		job.Payload.Metadata,
 	)
 
 	if err != nil {

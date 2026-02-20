@@ -1,122 +1,146 @@
 #!/bin/bash
 # bank-research.sh — Detect new investment bank research reports
-# Checks: Goldman Sachs, JPMorgan, Morgan Stanley, BlackRock
+# Uses RSS feeds and public APIs where available, falls back to web fetch
 # Usage: bash bank-research.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SPECIALIST_DIR="$(cd "$SCRIPT_DIR/../../specialists/fahad/references" 2>/dev/null && pwd || echo "")"
+SPECIALIST_DIR="$(cd "$SCRIPT_DIR/../../../specialists/fahad/references" 2>/dev/null && pwd || echo "")"
 STATE_FILE="${SPECIALIST_DIR:+$SPECIALIST_DIR/reports-state.json}"
 
 echo '{"bank_research": {'
 
-# --- Goldman Sachs Research ---
-echo '"goldman_sachs": ['
-GS_PAGE=$(curl -s --max-time 20 -L \
+# --- Goldman Sachs Insights (RSS) ---
+echo '"goldman_sachs": '
+GS_RSS=$(curl -s --max-time 20 -L \
     -H "User-Agent: Mozilla/5.0" \
-    "https://www.goldmansachs.com/insights/articles" 2>/dev/null || echo "")
+    "https://www.goldmansachs.com/insights/articles.rss" 2>/dev/null || echo "")
 
-if [ -n "$GS_PAGE" ]; then
-    echo "$GS_PAGE" | python3 -c "
-import sys, re, json
+if [ -n "$GS_RSS" ]; then
+    echo "$GS_RSS" | python3 -c "
+import sys, xml.etree.ElementTree as ET, json
 
-html = sys.stdin.read()
-matches = re.findall(r'<a[^>]*href=\"(/insights/articles/[^\"]+)\"[^>]*>\s*(?:<[^>]*>)*\s*([^<]+)', html)
+data = sys.stdin.read()
+try:
+    root = ET.fromstring(data)
+except:
+    print('[]')
+    sys.exit(0)
 
 results = []
-seen = set()
-for url, title in matches[:5]:
-    title = title.strip()
-    if title and len(title) > 5 and title not in seen:
-        seen.add(title)
-        results.append({'title': title, 'url': 'https://www.goldmansachs.com' + url, 'bank': 'Goldman Sachs'})
+for item in root.findall('.//item')[:5]:
+    title = item.findtext('title', '').strip()
+    link = item.findtext('link', '').strip()
+    pub = item.findtext('pubDate', '').strip()
+    if title and len(title) > 5:
+        results.append({'title': title, 'url': link, 'published': pub, 'bank': 'Goldman Sachs'})
 
 print(json.dumps(results))
 " 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
-echo '],'
+echo ','
 
-# --- JPMorgan Research ---
-echo '"jpmorgan": ['
-JPM_PAGE=$(curl -s --max-time 20 -L \
+# --- JPMorgan Research (RSS) ---
+echo '"jpmorgan": '
+JPM_RSS=$(curl -s --max-time 20 -L \
     -H "User-Agent: Mozilla/5.0" \
-    "https://www.jpmorgan.com/insights/research" 2>/dev/null || echo "")
+    "https://www.jpmorgan.com/insights/research.rss" 2>/dev/null || echo "")
 
-if [ -n "$JPM_PAGE" ]; then
-    echo "$JPM_PAGE" | python3 -c "
-import sys, re, json
+if [ -n "$JPM_RSS" ]; then
+    echo "$JPM_RSS" | python3 -c "
+import sys, xml.etree.ElementTree as ET, json
 
-html = sys.stdin.read()
-matches = re.findall(r'<a[^>]*href=\"(/insights/[^\"]+)\"[^>]*>\s*(?:<[^>]*>)*\s*([^<]+)', html)
+data = sys.stdin.read()
+try:
+    root = ET.fromstring(data)
+except:
+    print('[]')
+    sys.exit(0)
 
 results = []
-seen = set()
-for url, title in matches[:5]:
-    title = title.strip()
-    if title and len(title) > 5 and title not in seen:
-        seen.add(title)
-        results.append({'title': title, 'url': 'https://www.jpmorgan.com' + url, 'bank': 'JPMorgan'})
+for item in root.findall('.//item')[:5]:
+    title = item.findtext('title', '').strip()
+    link = item.findtext('link', '').strip()
+    pub = item.findtext('pubDate', '').strip()
+    if title and len(title) > 5:
+        results.append({'title': title, 'url': link, 'published': pub, 'bank': 'JPMorgan'})
 
 print(json.dumps(results))
 " 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
-echo '],'
+echo ','
 
-# --- Morgan Stanley Research ---
-echo '"morgan_stanley": ['
-MS_PAGE=$(curl -s --max-time 20 -L \
+# --- Morgan Stanley Ideas (RSS) ---
+echo '"morgan_stanley": '
+MS_RSS=$(curl -s --max-time 20 -L \
     -H "User-Agent: Mozilla/5.0" \
-    "https://www.morganstanley.com/ideas" 2>/dev/null || echo "")
+    "https://www.morganstanley.com/ideas.rss" 2>/dev/null || echo "")
 
-if [ -n "$MS_PAGE" ]; then
-    echo "$MS_PAGE" | python3 -c "
-import sys, re, json
+if [ -n "$MS_RSS" ]; then
+    echo "$MS_RSS" | python3 -c "
+import sys, xml.etree.ElementTree as ET, json
 
-html = sys.stdin.read()
-matches = re.findall(r'<a[^>]*href=\"(/ideas/[^\"]+)\"[^>]*>\s*(?:<[^>]*>)*\s*([^<]+)', html)
+data = sys.stdin.read()
+try:
+    root = ET.fromstring(data)
+except:
+    print('[]')
+    sys.exit(0)
 
 results = []
-seen = set()
-for url, title in matches[:5]:
-    title = title.strip()
-    if title and len(title) > 5 and title not in seen:
-        seen.add(title)
-        results.append({'title': title, 'url': 'https://www.morganstanley.com' + url, 'bank': 'Morgan Stanley'})
+for item in root.findall('.//item')[:5]:
+    title = item.findtext('title', '').strip()
+    link = item.findtext('link', '').strip()
+    pub = item.findtext('pubDate', '').strip()
+    if title and len(title) > 5:
+        results.append({'title': title, 'url': link, 'published': pub, 'bank': 'Morgan Stanley'})
 
 print(json.dumps(results))
 " 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
-echo '],'
+echo ','
 
-# --- BlackRock Investment Institute ---
-echo '"blackrock": ['
-BLK_PAGE=$(curl -s --max-time 20 -L \
+# --- BlackRock Investment Institute (RSS) ---
+echo '"blackrock": '
+BLK_RSS=$(curl -s --max-time 20 -L \
     -H "User-Agent: Mozilla/5.0" \
-    "https://www.blackrock.com/corporate/insights/blackrock-investment-institute" 2>/dev/null || echo "")
+    "https://www.blackrock.com/corporate/insights/blackrock-investment-institute.rss" 2>/dev/null || echo "")
 
-if [ -n "$BLK_PAGE" ]; then
-    echo "$BLK_PAGE" | python3 -c "
-import sys, re, json
+if [ -n "$BLK_RSS" ]; then
+    echo "$BLK_RSS" | python3 -c "
+import sys, xml.etree.ElementTree as ET, json
 
-html = sys.stdin.read()
-matches = re.findall(r'<a[^>]*href=\"([^\"]*insights[^\"]+)\"[^>]*>\s*(?:<[^>]*>)*\s*([^<]+)', html)
+data = sys.stdin.read()
+try:
+    root = ET.fromstring(data)
+except:
+    print('[]')
+    sys.exit(0)
 
 results = []
-seen = set()
-for url, title in matches[:5]:
-    title = title.strip()
-    if title and len(title) > 5 and title not in seen:
-        seen.add(title)
-        full_url = url if url.startswith('http') else 'https://www.blackrock.com' + url
-        results.append({'title': title, 'url': full_url, 'bank': 'BlackRock'})
+for item in root.findall('.//item')[:5]:
+    title = item.findtext('title', '').strip()
+    link = item.findtext('link', '').strip()
+    pub = item.findtext('pubDate', '').strip()
+    if title and len(title) > 5:
+        full_url = link if link.startswith('http') else 'https://www.blackrock.com' + link
+        results.append({'title': title, 'url': full_url, 'published': pub, 'bank': 'BlackRock'})
 
 print(json.dumps(results))
 " 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
-echo ']'
 
 echo '},'
+echo '"note": "RSS-based detection. If feeds return empty, use web_fetch tool conversationally for specific bank research pages.",'
 echo "\"fetched_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
 echo '}'
 

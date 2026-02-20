@@ -465,9 +465,10 @@ PicoClaw stores data in your configured workspace (default: `~/.picoclaw/workspa
 ~/.picoclaw/workspace/
 ├── sessions/          # Conversation sessions and history
 ├── memory/           # Long-term memory (MEMORY.md)
-├── state/            # Persistent state (last channel, etc.)
+├── state/            # Persistent state (topic mappings, etc.)
 ├── cron/             # Scheduled jobs database
-├── skills/           # Custom skills
+├── skills/           # Custom skills (including self-extend)
+├── specialists/      # Domain specialists (personas + knowledge)
 ├── AGENTS.md         # Agent behavior guide
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
 ├── IDENTITY.md       # Agent identity
@@ -511,16 +512,24 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 | `append_file` | Append to files | Only files within workspace |
 | `exec` | Execute commands | Command paths must be within workspace |
 
-#### Additional Exec Protection
+#### Exec Safety Modes
 
-Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous commands:
+The `exec` tool operates in two modes depending on `restrict_to_workspace`:
 
+| Mode | `restrict_to_workspace` | Behavior |
+|------|------------------------|----------|
+| **Restricted** (default) | `true` | Commands sandboxed to workspace. Dangerous patterns blocked (rm -rf, mkfs, dd, shutdown, etc.). 60s timeout. |
+| **Unrestricted** | `false` | Full system access. Only fork bombs blocked. 5-minute timeout. |
+
+When **restricted**, these patterns are blocked:
 * `rm -rf`, `del /f`, `rmdir /s` — Bulk deletion
 * `format`, `mkfs`, `diskpart` — Disk formatting
 * `dd if=` — Disk imaging
 * Writing to `/dev/sd[a-z]` — Direct disk writes
 * `shutdown`, `reboot`, `poweroff` — System shutdown
 * Fork bomb `:(){ :|:& };:`
+
+When **unrestricted**, only fork bombs are blocked. The agent has full control over the system — it can install packages, manage services, edit system configs, and operate as a VPS administrator.
 
 #### Error Examples
 
@@ -534,9 +543,9 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 {tool=exec, error=Command blocked by safety guard (dangerous pattern detected)}
 ```
 
-#### Disabling Restrictions (Security Risk)
+#### Enabling Full System Access
 
-If you need the agent to access paths outside the workspace:
+To give the agent unrestricted access to the entire system:
 
 **Method 1: Config file**
 
@@ -556,7 +565,7 @@ If you need the agent to access paths outside the workspace:
 export PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false
 ```
 
-> ⚠️ **Warning**: Disabling this restriction allows the agent to access any path on your system. Use with caution in controlled environments only.
+> ⚠️ **Warning**: Unrestricted mode gives the agent full control over your system. Only use this on a dedicated VPS or controlled environment where the agent is meant to be the operator.
 
 #### Security Boundary Consistency
 
@@ -569,6 +578,32 @@ The `restrict_to_workspace` setting applies consistently across all execution pa
 | Heartbeat tasks | Inherits same restriction ✅ |
 
 All paths share the same workspace restriction — there's no way to bypass the security boundary through subagents or scheduled tasks.
+
+### Specialists
+
+PicoClaw supports domain specialists — autonomous personas with their own identity, knowledge base, and scoped memory. Specialists live in `workspace/specialists/` and can be linked to Telegram forum topics for automatic routing.
+
+**Tools for specialist management:**
+
+| Tool | Description |
+|------|-------------|
+| `create_specialist` | Create a new specialist with a persona |
+| `consult_specialist` | Delegate a question to a specialist |
+| `link_topic` | Link a Telegram forum topic to a specialist |
+| `manage_telegram` | Create forum topics, pin messages, manage chat |
+
+The agent can manage specialists autonomously — just tell it "create a specialist for finance" or "link this topic to the cooking specialist" and it will handle everything.
+
+### Self-Extension
+
+When running in unrestricted mode, the agent can write its own tools in Go, compile them into its binary, and restart itself to gain new capabilities. A built-in `self-extend` skill guides the process:
+
+1. Write a `.go` file in `pkg/tools/`
+2. Register it in `pkg/agent/loop.go`
+3. Build with `go build`
+4. Restart the process
+
+This means the agent can extend itself on demand — if it needs a capability it doesn't have, it can build one.
 
 ### Heartbeat (Periodic Tasks)
 

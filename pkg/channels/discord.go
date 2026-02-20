@@ -209,7 +209,11 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 			if localPath != "" {
 				localFiles = append(localFiles, localPath)
 				part, err := media.ProcessFile(localPath)
-				if err == nil && part != nil {
+				if err != nil {
+					logger.ErrorCF("discord", "Failed to process media file", map[string]interface{}{
+						"path": localPath, "error": err.Error(),
+					})
+				} else if part != nil {
 					mediaParts = append(mediaParts, *part)
 				}
 			}

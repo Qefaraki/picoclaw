@@ -4,24 +4,29 @@
     "ft_companies": "https://www.ft.com/companies?format=rss",
     "reuters_business": "https://www.rss.reuters.com/news/business",
     "reuters_markets": "https://www.rss.reuters.com/news/wealth",
-    "wsj_markets": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+    "marketwatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "cnbc_finance": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
     "cnbc_world": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362",
-    "bloomberg_markets": "https://feeds.bloomberg.com/markets/news.rss"
+    "bloomberg_markets": "https://feeds.bloomberg.com/markets/news.rss",
+    "yahoo_finance": "https://finance.yahoo.com/news/rssindex",
+    "investing_com": "https://www.investing.com/rss/news.rss",
+    "semafor": "https://www.semafor.com/rss.xml",
+    "economist_finance": "https://www.economist.com/finance-and-economics/rss.xml",
+    "economist_business": "https://www.economist.com/business/rss.xml",
+    "sherwood_news": "https://sherwood.news/rss.xml",
+    "axios_markets": "https://api.axios.com/feed/"
   },
   "saudi": {
-    "argaam": "https://www.argaam.com/en/rss/articles",
-    "arab_news_business": "https://www.arabnews.com/taxonomy/term/462/feed"
+    "gulf_business": "https://gulfbusiness.com/feed/",
+    "arabian_business": "https://www.arabianbusiness.com/feed"
   },
   "commodities": {
-    "kitco_gold": "https://www.kitco.com/rss/gold.xml"
   },
   "substacks": {
     "the_diff": "https://thediff.co/feed",
-    "kyla_scanlon": "https://kylascanlon.substack.com/feed",
     "doomberg": "https://doomberg.substack.com/feed",
-    "odd_lots": "https://oddlots.substack.com/feed",
     "noahpinion": "https://noahpinion.substack.com/feed",
-    "matt_levine": "https://www.bloomberg.com/opinion/authors/ARbTQlRLRjE/matthew-s-levine.rss"
+    "matt_levine": "https://www.bloomberg.com/opinion/authors/ARbTQlRLRjE/matthew-s-levine.rss",
+    "ft_alphaville": "https://www.ft.com/alphaville?format=rss"
   }
 }

@@ -16,22 +16,30 @@ import (
 	"github.com/sipeed/picoclaw/pkg/state"
 )
 
+// thinkTagPattern matches <think>...</think> reasoning blocks (including multiline).
+var thinkTagPattern = regexp.MustCompile(`(?s)<think>.*?</think>\s*`)
+
+func stripThinkTags(s string) string {
+	return strings.TrimSpace(thinkTagPattern.ReplaceAllString(s, ""))
+}
+
 // ---------------------------------------------------------------------------
 // ConsultSpecialistTool — consult a domain specialist
 // ---------------------------------------------------------------------------
 
 // ConsultSpecialistTool executes a specialist agent with its own persona and scoped memory.
 type ConsultSpecialistTool struct {
-	loader      *specialists.SpecialistLoader
-	provider    providers.LLMProvider
-	model       string
-	tools       *ToolRegistry
-	vectorStore *memory.VectorStore
-	extractor   *memory.KnowledgeExtractor
-	maxIter     int
-	workspace   string
-	channel     string
-	chatID      string
+	loader         *specialists.SpecialistLoader
+	provider       providers.LLMProvider
+	model          string
+	tools          *ToolRegistry
+	vectorStore    *memory.VectorStore
+	extractor      *memory.KnowledgeExtractor
+	maxIter        int
+	workspace      string
+	channel        string
+	chatID         string
+	sessionSummary string // conversation summary for context continuity
 }
 
 // ConsultSpecialistConfig holds configuration for creating a ConsultSpecialistTool.
@@ -108,6 +116,10 @@ func (t *ConsultSpecialistTool) SetContext(channel, chatID string) {
 	t.chatID = chatID
 }
 
+func (t *ConsultSpecialistTool) SetSessionSummary(summary string) {
+	t.sessionSummary = summary
+}
+
 func (t *ConsultSpecialistTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
 	specialistName, _ := args["specialist"].(string)
 	question, _ := args["question"].(string)
@@ -142,7 +154,13 @@ func (t *ConsultSpecialistTool) Execute(ctx context.Context, args map[string]int
 	// Build system prompt
 	systemPrompt := persona + knowledgeSection + userContext +
 		"\n\n## Instructions\n\nWhen answering, cite your sources (who said it, when, where) so the user can verify. " +
-		"Be thorough and draw on all relevant knowledge available to you."
+		"Be thorough and draw on all relevant knowledge available to you. " +
+		"Do the whole job — chain tool calls, read files, run scripts. Don't stop halfway to ask permission."
+
+	// Inject conversation summary so specialist has context continuity
+	if t.sessionSummary != "" {
+		systemPrompt += "\n\n## Conversation Context\n\nThe user has been discussing the following (summary of recent conversation):\n\n" + t.sessionSummary
+	}
 
 	// Build messages
 	userContent := question
@@ -162,8 +180,8 @@ func (t *ConsultSpecialistTool) Execute(ctx context.Context, args map[string]int
 		Tools:         t.tools,
 		MaxIterations: t.maxIter,
 		LLMOptions: map[string]any{
-			"max_tokens":  4096,
-			"temperature": 0.7,
+			"max_tokens":  8192,
+			"temperature": 0.4,
 		},
 	}, messages, t.channel, t.chatID)
 
@@ -171,7 +189,7 @@ func (t *ConsultSpecialistTool) Execute(ctx context.Context, args map[string]int
 		return ErrorResult(fmt.Sprintf("Specialist consultation failed: %v", err))
 	}
 
-	result := loopResult.Content
+	result := stripThinkTags(loopResult.Content)
 
 	// Async: extract knowledge from the consultation into specialist-scoped memory
 	if t.extractor != nil {

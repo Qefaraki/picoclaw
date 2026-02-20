@@ -333,7 +333,11 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 		if localPath != "" {
 			localFiles = append(localFiles, localPath)
 			part, err := media.ProcessFile(localPath)
-			if err == nil && part != nil {
+			if err != nil {
+				logger.ErrorCF("line", "Failed to process media file", map[string]interface{}{
+					"path": localPath, "error": err.Error(),
+				})
+			} else if part != nil {
 				mediaParts = append(mediaParts, *part)
 			}
 			content = "[image]"

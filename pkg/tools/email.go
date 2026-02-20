@@ -48,7 +48,7 @@ func (t *EmailTool) Name() string {
 }
 
 func (t *EmailTool) Description() string {
-	return "Access your M365 email inbox. Can list recent/unread emails, search by sender or subject, read full email bodies, mark as read, archive, and list folders. Uses OAuth2 with auto-refresh."
+	return "Access your M365 email inbox. Can list recent/unread emails, search by sender or subject, read full email bodies, mark as read, archive, list folders, send new emails, and reply to existing emails. Uses OAuth2 with auto-refresh."
 }
 
 func (t *EmailTool) Parameters() map[string]interface{} {
@@ -58,11 +58,11 @@ func (t *EmailTool) Parameters() map[string]interface{} {
 			"action": map[string]interface{}{
 				"type":        "string",
 				"description": "Action to perform",
-				"enum":        []string{"recent", "unread", "search", "read", "mark_read", "archive", "folders"},
+				"enum":        []string{"recent", "unread", "search", "read", "mark_read", "archive", "folders", "send", "reply"},
 			},
 			"uid": map[string]interface{}{
 				"type":        "string",
-				"description": "Email UID (required for read, mark_read, archive)",
+				"description": "Email UID (required for read, mark_read, archive, reply)",
 			},
 			"sender": map[string]interface{}{
 				"type":        "string",
@@ -70,11 +70,27 @@ func (t *EmailTool) Parameters() map[string]interface{} {
 			},
 			"subject": map[string]interface{}{
 				"type":        "string",
-				"description": "Filter by subject keyword (for search)",
+				"description": "Email subject (for search filter or send)",
 			},
 			"days": map[string]interface{}{
 				"type":        "integer",
 				"description": "Number of days to look back (for recent, default: 7)",
+			},
+			"to": map[string]interface{}{
+				"type":        "string",
+				"description": "Recipient email address (required for send)",
+			},
+			"cc": map[string]interface{}{
+				"type":        "string",
+				"description": "CC email address(es) (for send)",
+			},
+			"bcc": map[string]interface{}{
+				"type":        "string",
+				"description": "BCC email address(es) (for send)",
+			},
+			"body": map[string]interface{}{
+				"type":        "string",
+				"description": "Email body text (required for send and reply)",
 			},
 		},
 		"required": []string{"action"},
@@ -102,8 +118,12 @@ func (t *EmailTool) Execute(ctx context.Context, args map[string]interface{}) *T
 		return t.archive(ctx, args)
 	case "folders":
 		return t.folders(ctx)
+	case "send":
+		return t.send(ctx, args)
+	case "reply":
+		return t.reply(ctx, args)
 	default:
-		return ErrorResult(fmt.Sprintf("unknown action: %s (use: recent, unread, search, read, mark_read, archive, folders)", action))
+		return ErrorResult(fmt.Sprintf("unknown action: %s (use: recent, unread, search, read, mark_read, archive, folders, send, reply)", action))
 	}
 }
 
@@ -225,6 +245,72 @@ func (t *EmailTool) folders(ctx context.Context) *ToolResult {
 		return t.handleError(err)
 	}
 	return SilentResult("Mailbox folders:\n" + out)
+}
+
+func (t *EmailTool) send(ctx context.Context, args map[string]interface{}) *ToolResult {
+	to, _ := args["to"].(string)
+	if to == "" {
+		return ErrorResult("to is required for send action")
+	}
+	subject, _ := args["subject"].(string)
+	if subject == "" {
+		return ErrorResult("subject is required for send action")
+	}
+	body, _ := args["body"].(string)
+	if body == "" {
+		return ErrorResult("body is required for send action")
+	}
+
+	cmdArgs := []string{"send", "--to", to, "--subject", subject, "--body", body}
+	if cc, ok := args["cc"].(string); ok && cc != "" {
+		cmdArgs = append(cmdArgs, "--cc", cc)
+	}
+	if bcc, ok := args["bcc"].(string); ok && bcc != "" {
+		cmdArgs = append(cmdArgs, "--bcc", bcc)
+	}
+
+	out, err := t.run(ctx, cmdArgs...)
+	if err != nil {
+		return t.handleError(err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		return SilentResult(out)
+	}
+	if sent, ok := result["sent"].(bool); ok && sent {
+		return SilentResult(fmt.Sprintf("Email sent to %s: %s", to, subject))
+	}
+	return ErrorResult(fmt.Sprintf("Failed to send email: %s", out))
+}
+
+func (t *EmailTool) reply(ctx context.Context, args map[string]interface{}) *ToolResult {
+	uid, _ := args["uid"].(string)
+	if uid == "" {
+		return ErrorResult("uid is required for reply action")
+	}
+	body, _ := args["body"].(string)
+	if body == "" {
+		return ErrorResult("body is required for reply action")
+	}
+
+	out, err := t.run(ctx, "reply", uid, "--body", body)
+	if err != nil {
+		return t.handleError(err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		return SilentResult(out)
+	}
+	if sent, ok := result["sent"].(bool); ok && sent {
+		replyTo, _ := result["to"].(string)
+		return SilentResult(fmt.Sprintf("Reply sent to %s (re: UID %s)", replyTo, uid))
+	}
+	if errMsg, ok := result["error"].(string); ok {
+		return ErrorResult(errMsg)
+	}
+	return ErrorResult(fmt.Sprintf("Failed to reply to UID %s: %s", uid, out))
 }
 
 // -- Helpers --

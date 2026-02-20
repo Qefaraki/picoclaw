@@ -163,6 +163,10 @@ func buildClaudeParams(messages []Message, tools []ToolDefinition, model string,
 						blocks = append(blocks, anthropic.NewTextBlock(part.Text))
 					}
 				}
+				// Guard against empty blocks (all parts had unrecognized types)
+				if len(blocks) == 0 {
+					blocks = append(blocks, anthropic.NewTextBlock("[media]"))
+				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(blocks...))
 			} else {
 				anthropicMessages = append(anthropicMessages,

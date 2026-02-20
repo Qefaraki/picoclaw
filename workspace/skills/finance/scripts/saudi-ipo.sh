@@ -6,13 +6,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SPECIALIST_DIR="$(cd "$SCRIPT_DIR/../../specialists/fahad/references" 2>/dev/null && pwd || echo "")"
+SPECIALIST_DIR="$(cd "$SCRIPT_DIR/../../../specialists/fahad/references" 2>/dev/null && pwd || echo "")"
 STATE_FILE="${SPECIALIST_DIR:+$SPECIALIST_DIR/ipo-tracker.json}"
 
 echo '{"saudi_ipos": {'
 
 # --- CMA Announcements ---
-echo '"cma_announcements": ['
+echo '"cma_announcements": '
 
 # Fetch CMA website for IPO-related announcements
 CMA_PAGE=$(curl -s --max-time 20 -L \
@@ -35,12 +35,14 @@ for url, title in matches[:10]:
 
 print(json.dumps(results))
 " 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
 
-echo '],'
+echo ','
 
 # --- Argaam IPO News ---
-echo '"argaam_ipos": ['
+echo '"argaam_ipos": '
 
 ARGAAM_PAGE=$(curl -s --max-time 20 -L \
     -H "User-Agent: Mozilla/5.0" \
@@ -64,12 +66,14 @@ for url, title in matches[:10]:
 
 print(json.dumps(results))
 " 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
 
-echo '],'
+echo ','
 
 # --- Tadawul New Listings ---
-echo '"tadawul_listings": ['
+echo '"tadawul_listings": '
 
 TADAWUL_PAGE=$(curl -s --max-time 20 -L \
     -H "User-Agent: Mozilla/5.0" \
@@ -93,9 +97,9 @@ for url, title in matches[:10]:
 
 print(json.dumps(results))
 " 2>/dev/null || echo "[]"
+else
+    echo "[]"
 fi
-
-echo ']'
 
 echo '},'
 echo "\"fetched_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""

@@ -146,12 +146,12 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 		parts = append(parts, bootstrapContent)
 	}
 
-	// Skills - show summary, AI can read full content with read_file tool
+	// Skills - show summary with key actions so agent knows what's available
 	skillsSummary := cb.skillsLoader.BuildSkillsSummary()
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+The following skills extend your capabilities. Each skill lists its available actions below. Run scripts via the exec tool. For full details, read the SKILL.md file.
 
 %s`, skillsSummary))
 	}
@@ -300,7 +300,7 @@ func (cb *ContextBuilder) BuildSpecialistMessages(history []providers.Message, s
 	if cb.skillsLoader != nil {
 		skillsSummary := cb.skillsLoader.BuildSkillsSummary()
 		if skillsSummary != "" {
-			systemPrompt += fmt.Sprintf("\n\n## Skills\nYou have access to skills that extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.\n%s", skillsSummary)
+			systemPrompt += fmt.Sprintf("\n\n## Skills\nYou have access to skills that extend your capabilities. Each skill lists its available actions. Run scripts via the exec tool.\n%s", skillsSummary)
 		}
 	}
 

@@ -643,6 +643,11 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 	// 1. Update tool contexts
 	al.updateToolContexts(opts.Channel, opts.ChatID)
 
+	// 1b. Pass conversation summary to session-aware tools (e.g., specialist)
+	if !opts.NoHistory {
+		al.updateSessionContext(opts.SessionKey)
+	}
+
 	// 2. Build messages (skip history for heartbeat)
 	var history []providers.Message
 	var summary string
@@ -790,7 +795,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		// Call LLM (with streaming if available)
 		llmOpts := map[string]interface{}{
 			"max_tokens":  8192,
-			"temperature": 0.7,
+			"temperature": 0.4,
 		}
 
 		var response *providers.LLMResponse
@@ -1028,6 +1033,49 @@ func (al *AgentLoop) updateToolContexts(channel, chatID string) {
 		if tool, ok := al.tools.Get(name); ok {
 			if ct, ok := tool.(tools.ContextualTool); ok {
 				ct.SetContext(channel, chatID)
+			}
+		}
+	}
+}
+
+// updateSessionContext passes conversation summary to session-aware tools
+// so they maintain context continuity (e.g., specialist knows what's been discussed).
+func (al *AgentLoop) updateSessionContext(sessionKey string) {
+	summary := al.sessions.GetSummary(sessionKey)
+	// Also include recent history as lightweight context if no summary yet
+	if summary == "" {
+		history := al.sessions.GetHistory(sessionKey)
+		if len(history) > 0 {
+			var parts []string
+			// Take last 6 messages max for a quick recap
+			start := 0
+			if len(history) > 6 {
+				start = len(history) - 6
+			}
+			for _, m := range history[start:] {
+				if m.Role == "user" || m.Role == "assistant" {
+					content := m.Content
+					if len(content) > 200 {
+						content = content[:200] + "..."
+					}
+					parts = append(parts, fmt.Sprintf("%s: %s", m.Role, content))
+				}
+			}
+			if len(parts) > 0 {
+				summary = strings.Join(parts, "\n")
+			}
+		}
+	}
+
+	if summary == "" {
+		return
+	}
+
+	// Set on all tools that implement SessionAwareTool
+	for _, name := range al.tools.List() {
+		if tool, ok := al.tools.Get(name); ok {
+			if sa, ok := tool.(tools.SessionAwareTool); ok {
+				sa.SetSessionSummary(summary)
 			}
 		}
 	}

@@ -33,13 +33,13 @@ ALERTS=$(echo "$MARKET_DATA" | jq --argjson idx "$INDEX_THRESHOLD" --argjson stk
         ($watchlist[0].commodities | keys) as $commodities |
         ($watchlist[0].crypto_alerts_only | keys) as $crypto |
         if ($q.symbol | IN($indices[])) then
-            if (($q.change_pct | fabs) >= $idx) then . + {category: "index", threshold: $idx} else empty end
+            if (($q.change_pct | abs) >= $idx) then . + {category: "index", threshold: $idx} else empty end
         elif ($q.symbol | IN($commodities[])) then
-            if (($q.change_pct | fabs) >= $cmd) then . + {category: "commodity", threshold: $cmd} else empty end
+            if (($q.change_pct | abs) >= $cmd) then . + {category: "commodity", threshold: $cmd} else empty end
         elif ($q.symbol | IN($crypto[])) then
-            if (($q.change_pct | fabs) >= $cry) then . + {category: "crypto", threshold: $cry} else empty end
+            if (($q.change_pct | abs) >= $cry) then . + {category: "crypto", threshold: $cry} else empty end
         else
-            if (($q.change_pct | fabs) >= $stk) then . + {category: "stock", threshold: $stk} else empty end
+            if (($q.change_pct | abs) >= $stk) then . + {category: "stock", threshold: $stk} else empty end
         end
     )
 ' 2>/dev/null || echo "[]")

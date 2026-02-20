@@ -11,7 +11,7 @@ func TestMessageTool_Execute_Success(t *testing.T) {
 	tool.SetContext("test-channel", "test-chat-id")
 
 	var sentChannel, sentChatID, sentContent string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
 		sentChannel = channel
 		sentChatID = chatID
 		sentContent = content
@@ -63,7 +63,7 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	tool.SetContext("default-channel", "default-chat-id")
 
 	var sentChannel, sentChatID string
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
 		sentChannel = channel
 		sentChatID = chatID
 		return nil
@@ -94,12 +94,103 @@ func TestMessageTool_Execute_WithCustomChannel(t *testing.T) {
 	}
 }
 
+func TestMessageTool_Execute_WithThreadID(t *testing.T) {
+	tool := NewMessageTool()
+	tool.SetContext("telegram", "-1003732393703")
+
+	var sentMetadata map[string]string
+	tool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
+		sentMetadata = metadata
+		return nil
+	})
+
+	ctx := context.Background()
+	args := map[string]interface{}{
+		"content":   "Test message",
+		"thread_id": "35",
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if result.IsError {
+		t.Errorf("Expected no error, got: %s", result.ForLLM)
+	}
+	if sentMetadata == nil {
+		t.Fatal("Expected metadata to be set")
+	}
+	if sentMetadata["thread_id"] != "35" {
+		t.Errorf("Expected thread_id '35', got '%s'", sentMetadata["thread_id"])
+	}
+}
+
+func TestMessageTool_Execute_InheritThreadIDFromMetadata(t *testing.T) {
+	tool := NewMessageTool()
+	tool.SetContext("telegram", "-1003732393703")
+	// Simulate inbound metadata from a cron job with thread_id
+	tool.SetMetadata(map[string]string{"thread_id": "35"})
+
+	var sentMetadata map[string]string
+	tool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
+		sentMetadata = metadata
+		return nil
+	})
+
+	ctx := context.Background()
+	// No explicit thread_id in args — should inherit from inbound metadata
+	args := map[string]interface{}{
+		"content": "Cron message",
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if result.IsError {
+		t.Errorf("Expected no error, got: %s", result.ForLLM)
+	}
+	if sentMetadata == nil {
+		t.Fatal("Expected metadata to be set from inbound metadata")
+	}
+	if sentMetadata["thread_id"] != "35" {
+		t.Errorf("Expected inherited thread_id '35', got '%s'", sentMetadata["thread_id"])
+	}
+}
+
+func TestMessageTool_Execute_ExplicitThreadIDOverridesInbound(t *testing.T) {
+	tool := NewMessageTool()
+	tool.SetContext("telegram", "-1003732393703")
+	tool.SetMetadata(map[string]string{"thread_id": "35"})
+
+	var sentMetadata map[string]string
+	tool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
+		sentMetadata = metadata
+		return nil
+	})
+
+	ctx := context.Background()
+	// Explicit thread_id should override inbound metadata
+	args := map[string]interface{}{
+		"content":   "Test message",
+		"thread_id": "99",
+	}
+
+	result := tool.Execute(ctx, args)
+
+	if result.IsError {
+		t.Errorf("Expected no error, got: %s", result.ForLLM)
+	}
+	if sentMetadata == nil {
+		t.Fatal("Expected metadata to be set")
+	}
+	if sentMetadata["thread_id"] != "99" {
+		t.Errorf("Expected explicit thread_id '99', got '%s'", sentMetadata["thread_id"])
+	}
+}
+
 func TestMessageTool_Execute_SendFailure(t *testing.T) {
 	tool := NewMessageTool()
 	tool.SetContext("test-channel", "test-chat-id")
 
 	sendErr := errors.New("network error")
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
 		return sendErr
 	})
 
@@ -153,7 +244,7 @@ func TestMessageTool_Execute_NoTargetChannel(t *testing.T) {
 	tool := NewMessageTool()
 	// No SetContext called, so defaultChannel and defaultChatID are empty
 
-	tool.SetSendCallback(func(channel, chatID, content string) error {
+	tool.SetSendCallback(func(channel, chatID, content string, metadata map[string]string) error {
 		return nil
 	})
 
@@ -255,5 +346,14 @@ func TestMessageTool_Parameters(t *testing.T) {
 	}
 	if chatIDProp["type"] != "string" {
 		t.Error("Expected chat_id type to be 'string'")
+	}
+
+	// Check thread_id property (optional)
+	threadIDProp, ok := props["thread_id"].(map[string]interface{})
+	if !ok {
+		t.Error("Expected 'thread_id' property")
+	}
+	if threadIDProp["type"] != "string" {
+		t.Error("Expected thread_id type to be 'string'")
 	}
 }

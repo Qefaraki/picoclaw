@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import email
 import email.header
+import email.mime.text
 import email.utils
 import getpass
 import imaplib
@@ -13,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import smtplib
 import sys
 import time
 import traceback
@@ -27,9 +30,11 @@ logger = logging.getLogger("email_dashboard")
 
 IMAP_HOST = "outlook.office365.com"
 IMAP_PORT = 993
+SMTP_HOST = "smtp.office365.com"
+SMTP_PORT = 587
 DEFAULT_CLIENT_ID = "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
 TENANT = "organizations"
-SCOPES = "https://outlook.office365.com/IMAP.AccessAsUser.All offline_access"
+SCOPES = "https://outlook.office365.com/IMAP.AccessAsUser.All https://outlook.office365.com/SMTP.Send offline_access"
 TOKEN_EXPIRY_MARGIN = 300  # 5 minutes
 
 
@@ -543,6 +548,90 @@ class EmailDashboard:
             return result
         return self._with_retry(_op)
 
+    # -- send / reply --
+
+    def _smtp_send(self, msg: email.mime.text.MIMEText):
+        """Send a MIMEText message via SMTP with XOAUTH2."""
+        token = self.tm.get_access_token()
+        if not token:
+            raise RuntimeError("No valid OAuth2 token — re-authenticate first")
+
+        auth_string = f"user={self.tm.email_address}\x01auth=Bearer {token}\x01\x01"
+        encoded = base64.b64encode(auth_string.encode()).decode()
+
+        smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+        try:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            code, resp = smtp.docmd("AUTH", "XOAUTH2 " + encoded)
+            if code not in (235, 334):
+                raise RuntimeError(f"SMTP AUTH failed ({code}): {resp.decode(errors='replace')}")
+            smtp.sendmail(msg["From"], msg["To"].split(","), msg.as_string())
+        finally:
+            smtp.quit()
+
+    def send_email(self, to: str, subject: str, body: str,
+                   cc: str | None = None, bcc: str | None = None) -> dict:
+        """Compose and send a new email."""
+        msg = email.mime.text.MIMEText(body, "plain", "utf-8")
+        msg["From"] = self.tm.email_address
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg["Date"] = email.utils.formatdate(localtime=True)
+        msg["Message-ID"] = email.utils.make_msgid(domain=self.tm.email_address.split("@")[1])
+        if cc:
+            msg["Cc"] = cc
+        if bcc:
+            msg["Bcc"] = bcc
+
+        self._smtp_send(msg)
+        return {"sent": True, "to": to, "subject": subject}
+
+    def reply_to_email(self, uid: str, body: str) -> dict:
+        """Reply to an email by UID."""
+        original = self.get_email_body(uid)
+        if "error" in original:
+            return original
+
+        # fetch threading headers
+        def _fetch_threading():
+            status, data = self.conn.uid(
+                "FETCH", uid,
+                "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT MESSAGE-ID REFERENCES)])"
+            )
+            if status != "OK" or not data or data[0] is None:
+                return {}
+            raw = data[0][1] if isinstance(data[0], tuple) else data[0]
+            return email.message_from_bytes(raw)
+        orig_hdrs = self._with_retry(_fetch_threading)
+
+        orig_from = self._decode_header(orig_hdrs.get("From", "")) if orig_hdrs else original["from"]
+        orig_subject = self._decode_header(orig_hdrs.get("Subject", "")) if orig_hdrs else original["subject"]
+        orig_msg_id = orig_hdrs.get("Message-ID", "") if orig_hdrs else ""
+        orig_refs = orig_hdrs.get("References", "") if orig_hdrs else ""
+
+        # extract reply-to address
+        reply_to = email.utils.parseaddr(orig_from)[1]
+        if not reply_to:
+            return {"error": f"Could not determine reply address from: {orig_from}"}
+
+        subject = orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
+
+        msg = email.mime.text.MIMEText(body, "plain", "utf-8")
+        msg["From"] = self.tm.email_address
+        msg["To"] = reply_to
+        msg["Subject"] = subject
+        msg["Date"] = email.utils.formatdate(localtime=True)
+        msg["Message-ID"] = email.utils.make_msgid(domain=self.tm.email_address.split("@")[1])
+        if orig_msg_id:
+            msg["In-Reply-To"] = orig_msg_id
+            refs = f"{orig_refs} {orig_msg_id}".strip() if orig_refs else orig_msg_id
+            msg["References"] = refs
+
+        self._smtp_send(msg)
+        return {"sent": True, "to": reply_to, "subject": subject, "in_reply_to": uid}
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -638,6 +727,18 @@ def main():
     p_archive.add_argument("uid", help="Email UID")
 
     sub.add_parser("folders", help="List mailbox folders")
+
+    p_send = sub.add_parser("send", help="Send a new email")
+    p_send.add_argument("--to", required=True, help="Recipient email address")
+    p_send.add_argument("--subject", required=True, help="Email subject")
+    p_send.add_argument("--body", required=True, help="Email body text")
+    p_send.add_argument("--cc", help="CC address(es)")
+    p_send.add_argument("--bcc", help="BCC address(es)")
+
+    p_reply = sub.add_parser("reply", help="Reply to an email by UID")
+    p_reply.add_argument("uid", help="Email UID to reply to")
+    p_reply.add_argument("--body", required=True, help="Reply body text")
+
     sub.add_parser("logout", help="Clear saved credentials")
 
     args = parser.parse_args()
@@ -710,6 +811,29 @@ def main():
                 print("  Mailbox folders:")
                 for f in folders:
                     print(f"    {f}")
+
+        elif args.command == "send":
+            result = dashboard.send_email(
+                to=args.to, subject=args.subject, body=args.body,
+                cc=args.cc, bcc=args.bcc,
+            )
+            if output_json:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                if result.get("sent"):
+                    print(f"  Sent to {result['to']}: {result['subject']}")
+                else:
+                    print(f"  Error: {result.get('error', 'unknown')}")
+
+        elif args.command == "reply":
+            result = dashboard.reply_to_email(uid=args.uid, body=args.body)
+            if output_json:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                if result.get("sent"):
+                    print(f"  Replied to {result['to']}: {result['subject']}")
+                else:
+                    print(f"  Error: {result.get('error', 'unknown')}")
 
     except KeyboardInterrupt:
         print("\n  Interrupted.")
